@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { createCutCaps } from './cut_caps.js';
-import { initAssistant } from './assistant.js';
+import { attachViewer } from './assistant_bridge.js';
 
 // FreeSurfer triangle surfaces: two header lines, big-endian float32
 // coordinates and zero-based int32 triangle indices (regardless of extension).
@@ -94,6 +94,14 @@ function requestRender() {
   });
 }
 controls.addEventListener('change', requestRender);
+const meshDetail = document.getElementById('mesh-detail');
+meshDetail.addEventListener('change', () => {
+  meshDetail.disabled = true;
+  status.textContent = 'Mesh-Details werden neu geladen …';
+  const url = new URL(window.location.href);
+  url.searchParams.set('detail', meshDetail.value);
+  window.location.assign(url);
+});
 function updateResolution() {
   const value = document.getElementById('resolution').value;
   renderer.setPixelRatio(value === 'native' ? window.devicePixelRatio || 1 : Number(value));
@@ -116,7 +124,7 @@ const regions = names.map((name, index) => {
   const checkbox = document.getElementById(`region-${index}`);
   const state = document.getElementById(`region-state-${index}`);
   document.getElementById(`region-color-${index}`).style.backgroundColor = color.getStyle();
-  const region = { color, checkbox, state, object: null };
+  const region = { color, checkbox, state, object: null, optIn: name === 'CSF.obj' };
   checkbox.addEventListener('change', () => {
     if (region.object) region.object.visible = checkbox.checked;
     updateRegionCount();
@@ -136,8 +144,9 @@ function setAllRegions(visible) {
   regions.forEach(region => {
     // Remember the choice for surfaces whose download is still in progress.
     if (!region.object && region.state.dataset.failed) return;
-    region.checkbox.checked = visible;
-    if (region.object) region.object.visible = visible;
+    const nextVisibility = visible && !region.optIn;
+    region.checkbox.checked = nextVisibility;
+    if (region.object) region.object.visible = nextVisibility;
   });
   updateRegionCount();
 }
@@ -217,14 +226,16 @@ function fitCamera(targetBounds = null) {
   const vertical = THREE.MathUtils.degToRad(camera.fov) / 2;
   const horizontal = Math.atan(Math.tan(vertical) * camera.aspect);
   const radius = Math.max(sphere.radius, 0.01);
-  const distance = radius / Math.sin(Math.min(vertical, horizontal)) * 1.15;
+  // The bounding sphere guarantees that every region stays inside the frame;
+  // retain only a slim two-percent visual safety margin around it.
+  const distance = radius / Math.sin(Math.min(vertical, horizontal)) * 0.7;
   controls.target.copy(sphere.center);
   camera.position.copy(sphere.center).add(new THREE.Vector3(0.5, 0.3, 1).normalize().multiplyScalar(distance));
   camera.near = radius / 1000;
   camera.far = distance + radius * 100;
   camera.updateProjectionMatrix();
-  controls.minDistance = radius * 0.05;
-  controls.maxDistance = radius * 20;
+  controls.minDistance = radius * 0.2;
+  controls.maxDistance = radius * 5;
   controls.update();
 }
 
@@ -236,7 +247,7 @@ function updateStatus() {
 
 async function loadRegion(name, index) {
   try {
-    const response = await fetch('/mesh/' + encodeURIComponent(name));
+    const response = await fetch('/mesh/' + encodeURIComponent(name) + '?detail=' + encodeURIComponent(meshDetail.value));
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const object = parseSurface(await response.arrayBuffer());
     let triangles = 0;
@@ -315,6 +326,36 @@ document.getElementById('reset').disabled = loaded === 0;
 if (!names.length) status.textContent = 'Keine .obj-Dateien in export_preview gefunden.';
 
 const regionMap = new Map(regions.map((region, index) => [names[index].slice(0, -4), region]));
+
+function setRegionOpacity(region, opacity, makeVisible = true) {
+  region.opacity = opacity;
+  if (makeVisible) {
+    region.object.visible = true;
+    region.checkbox.checked = true;
+  }
+  region.object.traverse(child => {
+    if (!child.isMesh) return;
+    const transparent = opacity < 1;
+    if (child.material.transparent !== transparent) child.material.needsUpdate = true;
+    child.material.opacity = opacity;
+    child.material.transparent = transparent;
+    child.material.depthWrite = !transparent;
+  });
+  region.state.textContent = opacity < 1 ? `${Math.round(opacity * 100)} % deckend` : '';
+}
+
+function selectRegions(selected) {
+  for (const region of regions) {
+    if (!region.object) continue;
+    region.highlighted = selected.includes(region);
+    region.object.traverse(child => {
+      if (!child.isMesh) return;
+      child.material.color.copy(region.color);
+      child.material.emissive.set(0x000000);
+    });
+  }
+}
+
 export const assistantViewer = {
   getState() {
     const matching = predicate => [...regionMap].filter(([, region]) => region.object && predicate(region)).map(([id]) => id);
@@ -327,7 +368,7 @@ export const assistantViewer = {
   },
   execute(action) {
     const args = action.arguments;
-    const allowed = ['highlight_regions', 'set_visibility', 'set_opacity', 'isolate_regions', 'focus_regions', 'set_cut', 'reset_view'];
+    const allowed = ['highlight_regions', 'set_visibility', 'set_opacity', 'isolate_regions', 'set_cut', 'reset_view'];
     if (!allowed.includes(action.name) || !args || typeof args !== 'object') throw new Error('Unbekannte Vieweraktion.');
     const selected = (args.region_ids ?? []).map(id => {
       const region = regionMap.get(id);
@@ -335,47 +376,34 @@ export const assistantViewer = {
       return region;
     });
     if (action.name === 'highlight_regions') {
-      for (const region of regions) {
-        if (!region.object) continue;
-        region.highlighted = selected.includes(region);
-        region.object.traverse(child => {
-          if (!child.isMesh) return;
-          // Keep anatomical region colors, including when several targets are isolated.
-          child.material.color.copy(region.color);
-          child.material.emissive.set(0x000000);
-        });
-      }
+      selectRegions(selected);
     } else if (action.name === 'set_opacity') {
       if (!selected.length || !Number.isFinite(args.opacity) || args.opacity < 0 || args.opacity > 1) throw new Error('Deckkraft muss zwischen 0 und 1 liegen; mindestens ein Areal wählen.');
-      for (const region of selected) {
-        region.opacity = args.opacity;
-        region.object.visible = true;
-        region.checkbox.checked = true;
-        region.object.traverse(child => {
-          if (!child.isMesh) return;
-          const transparent = args.opacity < 1;
-          if (child.material.transparent !== transparent) child.material.needsUpdate = true;
-          child.material.opacity = args.opacity;
-          child.material.transparent = transparent;
-          child.material.depthWrite = !transparent;
-        });
-        region.state.textContent = args.opacity < 1 ? `${Math.round(args.opacity * 100)} % deckend` : '';
-      }
-    } else if (action.name === 'set_visibility' || action.name === 'isolate_regions') {
-      if (action.name === 'set_visibility' && typeof args.visible !== 'boolean') throw new Error('Ungültige Sichtbarkeit.');
-      if (action.name === 'isolate_regions' && !selected.length) throw new Error('Keine Zielregion.');
+      for (const region of selected) setRegionOpacity(region, args.opacity);
+    } else if (action.name === 'set_visibility') {
+      if (typeof args.visible !== 'boolean') throw new Error('Ungültige Sichtbarkeit.');
       for (const region of regions) {
         if (!region.object) continue;
-        if (action.name === 'isolate_regions' || selected.includes(region)) {
-          region.object.visible = action.name === 'isolate_regions' ? selected.includes(region) : args.visible;
+        if (selected.includes(region)) {
+          region.object.visible = args.visible;
           region.checkbox.checked = region.object.visible;
         }
       }
-    } else if (action.name === 'focus_regions') {
+    } else if (action.name === 'isolate_regions') {
       if (!selected.length) throw new Error('Keine Zielregion.');
-      const bounds = new THREE.Box3();
-      selected.forEach(region => bounds.union(new THREE.Box3().setFromObject(region.object)));
-      fitCamera(bounds);
+      selectRegions(selected);
+      for (const region of regions) {
+        if (!region.object) continue;
+        if (region.optIn && !selected.includes(region)) {
+          setRegionOpacity(region, 1, false);
+          region.object.visible = false;
+          region.checkbox.checked = false;
+        } else {
+          setRegionOpacity(region, selected.includes(region) ? 1 : 0.01);
+        }
+      }
+      // Keep the full brain in frame instead of zooming onto the selected anatomy.
+      fitCamera();
     } else if (action.name === 'set_cut') {
       const index = cutAxes.indexOf(args.axis);
       if (index < 0 || !Number.isFinite(args.min) || !Number.isFinite(args.max) || args.min < 0 || args.max > 100 || args.min > args.max) throw new Error('Ungültige Schnittgrenzen.');
@@ -383,8 +411,10 @@ export const assistantViewer = {
       cutInputs[index].max.value = args.max;
       updateCuts();
     } else if (action.name === 'reset_view') {
+      for (const region of regions) {
+        if (region.object) setRegionOpacity(region, 1, false);
+      }
       setAllRegions(true);
-      this.execute({ name: 'set_opacity', arguments: { region_ids: this.getState().loaded, opacity: 1 } });
       this.execute({ name: 'highlight_regions', arguments: { region_ids: [] } });
       document.getElementById('reset-cuts').click();
       fitCamera();
@@ -395,9 +425,8 @@ export const assistantViewer = {
   describe(action) {
     const labels = { highlight_regions: 'Markierung aktualisiert', set_visibility: 'Sichtbarkeit geändert',
       set_opacity: `Deckkraft: ${Math.round(action.arguments.opacity * 100)} %`,
-      isolate_regions: 'Zielareale isoliert', focus_regions: 'Kamera ausgerichtet', set_cut: 'Schnitt eingestellt', reset_view: 'Ansicht zurückgesetzt' };
+      isolate_regions: 'Zielareale hervorgehoben (Umgebung 1 %)', set_cut: 'Schnitt eingestellt', reset_view: 'Ansicht zurückgesetzt' };
     return labels[action.name] + (action.arguments.region_ids?.length ? ': ' + action.arguments.region_ids.join(', ') : '');
   },
 };
-if (loaded) initAssistant(assistantViewer);
-else document.getElementById('assistant-status').textContent = 'Keine Areale geladen. Bitte Ladefehler beheben.';
+if (loaded) attachViewer(assistantViewer);

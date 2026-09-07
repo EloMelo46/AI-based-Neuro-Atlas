@@ -1,6 +1,5 @@
 import { initMicrophone } from './microphone.js';
 import { initSpeech } from './speech.js';
-import { initRealtime } from './realtime.js';
 
 export async function initAssistant(viewer) {
   const status = document.getElementById('assistant-status');
@@ -8,14 +7,9 @@ export async function initAssistant(viewer) {
   const input = document.getElementById('assistant-input');
   const send = document.getElementById('assistant-send');
   const reset = document.getElementById('assistant-new');
-  const availability = document.createElement('p');
-  availability.className = 'hint';
-  availability.setAttribute('role', 'status');
-  document.getElementById('assistant-form').appendChild(availability);
-  if (['assistant-audio', 'speech-status', 'speech-stop', 'assistant-voice', 'realtime-start', 'realtime-status', 'realtime-audio'].some(id => !document.getElementById(id))) {
+  if (['assistant-audio', 'assistant-voice', 'assistant-speak', 'assistant-mic'].some(id => !document.getElementById(id))) {
     const reason = 'Veraltete Serverseite: Python-Server mit Strg+C stoppen, neu starten und danach Strg+F5 drücken.';
     status.textContent = reason;
-    availability.textContent = reason;
     send.title = reason;
     document.getElementById('assistant-mic').title = reason;
     return;
@@ -23,8 +17,9 @@ export async function initAssistant(viewer) {
   let busy = false;
   let configured = false;
   let microphone = null;
-  let realtime = null;
-  const speech = initSpeech();
+  let requestController = null;
+  let interrupted = false;
+  const speech = initSpeech({ onError(text) { message(text, 'error'); } });
 
   function message(text, kind = '') {
     const row = document.createElement('div');
@@ -34,8 +29,10 @@ export async function initAssistant(viewer) {
     log.scrollTop = log.scrollHeight;
     return row;
   }
-  function answer(part) {
-    const row = message('');
+  function answer(part, existingRow = null) {
+    const row = existingRow || message('');
+    row.replaceChildren();
+    row.classList.remove('streaming');
     const chars = Array.from(part.text);
     let offset = 0;
     for (const cite of [...part.citations].sort((a, b) => a.start_index - b.start_index)) {
@@ -55,13 +52,51 @@ export async function initAssistant(viewer) {
     row.appendChild(document.createTextNode(chars.slice(offset).join('')));
     log.scrollTop = log.scrollHeight;
   }
-  async function post(path, body) {
-    const response = await fetch(path, { method: 'POST', headers: {
-      'Content-Type': 'application/json', 'X-Brain-Viewer': '1',
-    }, body: JSON.stringify(body), signal: AbortSignal.timeout(180000) });
+  async function post(path, body, timeoutMs = 180000) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    let response;
+    try {
+      response = await fetch(path, { method: 'POST', headers: {
+        'Content-Type': 'application/json', 'X-Brain-Viewer': '1',
+      }, body: JSON.stringify(body), signal: controller.signal });
+    } finally { clearTimeout(timeout); }
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'Anfrage fehlgeschlagen.');
     return data;
+  }
+  async function streamChat(path, body, onDelta, signal) {
+    const response = await fetch(path, { method: 'POST', headers: {
+      'Content-Type': 'application/json', 'X-Brain-Viewer': '1',
+    }, body: JSON.stringify(body), signal });
+    if (!response.ok) {
+      const data = await response.json();
+      throw new Error(data.error || 'Anfrage fehlgeschlagen.');
+    }
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error('Dieser Browser unterstützt keinen Textstream.');
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let result = null;
+    function consume(raw) {
+      if (!raw.trim()) return;
+      const event = JSON.parse(raw);
+      if (event.type === 'delta') onDelta(event.text || '');
+      else if (event.type === 'result') result = event.data;
+      else if (event.type === 'error') throw new Error(event.error || 'Anfrage fehlgeschlagen.');
+      else if (event.type === 'cancelled') throw new DOMException('Antwort unterbrochen', 'AbortError');
+    }
+    while (true) {
+      const { value, done } = await reader.read();
+      buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const raw of lines) consume(raw);
+      if (done) break;
+    }
+    consume(buffer);
+    if (!result) throw new Error('Der Antwortstream endete unerwartet.');
+    return result;
   }
   function setBusy(value) {
     busy = value;
@@ -70,24 +105,24 @@ export async function initAssistant(viewer) {
     reset.disabled = value;
     input.disabled = value;
     microphone?.setAvailable(!value && configured);
-    realtime?.setAvailable(!value && configured);
   }
-  realtime = initRealtime({ viewer, message, answer, onActive(value) {
-    if (value) speech.stop();
-    setBusy(value);
-    document.getElementById('assistant-form').setAttribute('aria-busy', 'false');
-    status.textContent = value ? 'Realtime-Sprachgespräch aktiv · Textchat pausiert.' : 'Bereit.';
-    for (const id of ['assistant-voice', 'assistant-web', 'assistant-speak']) document.getElementById(id).disabled = value;
-  } });
+  function interruptResponse() {
+    if (!requestController) return;
+    interrupted = true;
+    requestController.abort();
+    speech.stop();
+    status.textContent = 'Antwort wird unterbrochen …';
+    void post('/api/assistant/cancel', {}, 10000).catch(() => {});
+  }
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && requestController) interruptResponse();
+  });
   microphone = initMicrophone({ button: document.getElementById('assistant-mic'), status, setBusy, onStart: speech.stop,
     onText(text) {
       input.value = text;
       document.getElementById('assistant-form').requestSubmit();
     },
     onError(text) { message(text, 'error'); status.textContent = 'Mikrofoneingabe fehlgeschlagen.'; },
-  });
-  document.getElementById('clear-highlight').addEventListener('click', () => {
-    viewer.execute({ name: 'highlight_regions', arguments: { region_ids: [] } });
   });
   reset.addEventListener('click', async () => {
     if (busy) return;
@@ -109,9 +144,18 @@ export async function initAssistant(viewer) {
     setBusy(true);
     speech.stop();
     status.textContent = 'Der Assistent arbeitet …';
+    interrupted = false;
+    requestController = new AbortController();
+    const timeout = setTimeout(() => requestController?.abort(), 180000);
+    let streamedRow = null;
     try {
-      let data = await post('/api/assistant/chat', { message: question, state: viewer.getState(),
-        web_search: document.getElementById('assistant-web').checked });
+      const request = body => streamChat('/api/assistant/chat', body, delta => {
+        if (!streamedRow) streamedRow = message('', 'streaming');
+        streamedRow.appendChild(document.createTextNode(delta));
+        log.scrollTop = log.scrollHeight;
+        status.textContent = 'Antwort wird übertragen …';
+      }, requestController.signal);
+      let data = await request({ message: question, state: viewer.getState() });
       for (let round = 0; data.actions.length && round < 7; round++) {
         const results = [];
         for (const action of data.actions) {
@@ -124,27 +168,39 @@ export async function initAssistant(viewer) {
             message(error.message, 'error');
           }
         }
-        data = await post('/api/assistant/chat', { turn_id: data.turn_id, results, state: viewer.getState() });
+        data = await request({ turn_id: data.turn_id, results, state: viewer.getState() });
       }
       if (data.actions.length) throw new Error('Aktionslimit erreicht. Bitte neues Gespräch starten.');
-      data.messages.forEach(answer);
+      data.messages.forEach((part, index) => answer(part, index === 0 ? streamedRow : null));
       if (document.getElementById('assistant-speak').checked) speech.speak(data.messages, document.getElementById('assistant-voice').value);
       status.textContent = 'Bereit.';
     } catch (error) {
-      message(error.message + ' Falls Aktionen bereits ausgeführt wurden, bleiben sie bestehen. Bei Verbindungsabbruch bitte ein neues Gespräch starten.', 'error');
-      status.textContent = 'Anfrage fehlgeschlagen.';
-    } finally { setBusy(false); input.focus(); }
+      streamedRow?.classList.remove('streaming');
+      if (error.name === 'AbortError') {
+        if (!interrupted) {
+          void post('/api/assistant/cancel', {}, 10000).catch(() => {});
+          message('Zeitlimit der Anfrage erreicht.', 'error');
+        }
+        status.textContent = interrupted ? 'Antwort unterbrochen.' : 'Anfrage fehlgeschlagen.';
+      } else {
+        message(error.message + ' Falls Aktionen bereits ausgeführt wurden, bleiben sie bestehen. Bei Verbindungsabbruch bitte ein neues Gespräch starten.', 'error');
+        status.textContent = 'Anfrage fehlgeschlagen.';
+      }
+    } finally {
+      clearTimeout(timeout);
+      requestController = null;
+      setBusy(false);
+      input.focus();
+    }
   });
   try {
     const response = await fetch('/api/assistant/config', { cache: 'no-store', signal: AbortSignal.timeout(10000) });
     if (!response.ok) throw new Error('Assistent-Konfiguration nicht erreichbar.');
     const config = await response.json();
     configured = config.configured;
-    status.textContent = configured ? `Bereit · ${config.model}` : 'OPENAI_API_KEY auf dem Server setzen und neu starten.';
-    availability.textContent = configured ? '' : 'Senden und Mikrofon sind gesperrt: OPENAI_API_KEY fehlt im laufenden Python-Server.';
+    status.textContent = configured ? 'Bereit.' : 'OPENAI_API_KEY auf dem Server setzen und neu starten.';
     setBusy(false);
   } catch (error) {
     status.textContent = error.message;
-    availability.textContent = 'Assistent nicht bereit: Serververbindung prüfen und Seite neu laden. ' + error.message;
   }
 }

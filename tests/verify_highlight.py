@@ -23,11 +23,18 @@ try:
         page.on('pageerror', lambda error: errors.append(str(error)))
         page.goto('http://127.0.0.1:5056')
         page.evaluate("async () => { window.viewer = (await import('/static/brain_viewer.js')).assistantViewer; }")
+        assert 'CSF' not in page.evaluate('viewer.getState().visible')
         page.evaluate("viewer.execute({name:'highlight_regions', arguments:{region_ids:['Left-Cerebral-Cortex']}})")
-        assert len(page.evaluate('viewer.getState().visible')) == 43
+        assert len(page.evaluate('viewer.getState().visible')) == 42
         assert page.locator('.is-highlighted').count() == 0
-        # Explicit isolation is only for visual inspection of the actual mesh color.
+        # Visual isolation keeps the whole brain visible as a 1% context shell.
         page.evaluate("viewer.execute({name:'isolate_regions', arguments:{region_ids:['Left-Cerebral-Cortex']}})")
+        focus_state = page.evaluate('viewer.getState()')
+        assert len(focus_state['visible']) == 42 and 'CSF' not in focus_state['visible']
+        assert focus_state['highlighted'] == ['Left-Cerebral-Cortex']
+        assert focus_state['opacities']['Left-Cerebral-Cortex'] == 1
+        assert all(value == 0.01 for key, value in focus_state['opacities'].items()
+                   if key not in ('Left-Cerebral-Cortex', 'CSF'))
         before = page.locator('#scene canvas').screenshot()
         page.wait_for_timeout(700)
         assert page.locator('#scene canvas').screenshot() != before, 'Isolated model should rotate'
@@ -50,19 +57,24 @@ try:
         page.wait_for_timeout(500)
         page.screenshot(path=str(OUTPUT_DIR / 'highlight.png'))
         page.evaluate("viewer.execute({name:'highlight_regions', arguments:{region_ids:['Left-Hippocampus']}})")
-        assert page.evaluate('viewer.getState().visible') == ['Left-Cerebral-Cortex']
-        page.locator('#clear-highlight').click()
-        assert page.evaluate('viewer.getState().visible') == ['Left-Cerebral-Cortex']
+        assert len(page.evaluate('viewer.getState().visible')) == 42
+        page.evaluate("viewer.execute({name:'highlight_regions', arguments:{region_ids:[]}})")
+        assert len(page.evaluate('viewer.getState().visible')) == 42
         page.evaluate("viewer.execute({name:'highlight_regions', arguments:{region_ids:['Left-Hippocampus']}})")
         page.locator('#show-regions').click()
-        page.locator('#clear-highlight').click()
-        assert len(page.evaluate('viewer.getState().visible')) == 43
+        page.evaluate("viewer.execute({name:'highlight_regions', arguments:{region_ids:[]}})")
+        assert len(page.evaluate('viewer.getState().visible')) == 42
+        page.evaluate("viewer.execute({name:'set_visibility', arguments:{region_ids:['CSF'], visible:true}})")
+        assert 'CSF' in page.evaluate('viewer.getState().visible')
+        page.locator('#show-regions').click()
+        assert 'CSF' not in page.evaluate('viewer.getState().visible')
         page.evaluate("viewer.execute({name:'highlight_regions', arguments:{region_ids:['Left-Hippocampus']}}); viewer.execute({name:'reset_view', arguments:{}})")
-        assert len(page.evaluate('viewer.getState().visible')) == 43
+        assert len(page.evaluate('viewer.getState().visible')) == 42
+        assert 'CSF' not in page.evaluate('viewer.getState().visible')
         assert page.evaluate('viewer.getState().highlighted') == []
         assert all(value == 1 for value in page.evaluate('viewer.getState().opacities').values())
         assert not errors, errors
         browser.close()
-        print('PASS: mesh highlight, no legend highlight, visibility unchanged on highlight/clear, reset.')
+        print('PASS: 100%/1% visual focus, whole-brain visibility, highlight/clear, opacity, reset.')
 finally:
     server.shutdown()

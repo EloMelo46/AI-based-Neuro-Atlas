@@ -20,17 +20,28 @@ def transcription(audio, mime):
     assert len(audio) > 100 and mime == 'audio/webm'
     captured.append(len(audio))
     return 'Erkläre mir den Hippocampus.'
+def response_stream(*_args):
+    response = {'status': 'completed', 'output': [{'type': 'message', 'content': [{'type': 'output_text',
+        'text': 'Die Mikrofoneingabe wurde empfangen.', 'annotations': []}]}]}
+    yield {'type': 'response.output_text.delta', 'delta': 'Die Mikrofoneingabe wurde empfangen.'}
+    yield {'type': 'response.completed', 'response': response}
 try:
-    with patch.dict(os.environ, {'OPENAI_API_KEY': 'test-only'}), patch('main.brain_assistant.transcribe_audio', side_effect=transcription), patch('main.brain_assistant.call_openai', return_value={
-        'status': 'completed', 'output': [{'type': 'message', 'content': [{'type': 'output_text',
-        'text': 'Die Mikrofoneingabe wurde empfangen.', 'annotations': []}]}]}), sync_playwright() as playwright:
+    with patch.dict(os.environ, {'OPENAI_API_KEY': 'test-only'}), \
+            patch('main.brain_assistant.transcribe_audio', side_effect=transcription), \
+            patch('main.brain_assistant.stream_openai', side_effect=response_stream), \
+            sync_playwright() as playwright:
         browser = playwright.chromium.launch(channel='chrome', headless=True,
             args=['--enable-unsafe-swiftshader', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'])
         page = browser.new_page(viewport={'width': 1440, 'height': 1000})
         errors = []
         page.on('pageerror', lambda error: errors.append(str(error)))
-        page.goto('http://127.0.0.1:5053')
-        page.wait_for_function("!document.querySelector('#assistant-mic').disabled", timeout=120000)
+        # Reproduce a failed/blocked 3D module: microphone setup must still run
+        # through the independent assistant bridge included by the real page.
+        page.route('**/static/brain_viewer.js', lambda route: route.abort())
+        page.goto('http://127.0.0.1:5053', wait_until='domcontentloaded')
+        page.wait_for_function("!document.querySelector('#assistant-mic').disabled", timeout=15000)
+        assert page.locator('#assistant-status').inner_text() == 'Bereit.'
+        assert '3D-Ansicht konnte nicht gestartet werden.' in page.locator('#status').inner_text()
         page.locator('#assistant-speak').uncheck()
         page.locator('#assistant-mic').click()
         page.wait_for_function("document.querySelector('#assistant-mic').getAttribute('aria-pressed') === 'true'")
@@ -47,7 +58,7 @@ try:
         page.wait_for_function("document.querySelector('#assistant-messages').textContent.includes('Mikrofonzugriff verweigert')")
         assert not page.locator('#assistant-send').is_disabled()
         assert not errors, errors
-        print('PASS: fake microphone capture/upload, automatic chat submission, mic reset, permission denial, no JS errors.')
+        print('PASS: assistant bootstraps despite 3D failure; fake microphone capture/upload, automatic chat submission, mic reset, permission denial, no JS errors.')
         browser.close()
 finally:
     server.shutdown()

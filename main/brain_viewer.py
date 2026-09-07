@@ -1,5 +1,6 @@
 ﻿from pathlib import Path
-from flask import Flask, render_template_string, send_from_directory
+from flask import Flask, abort, render_template_string, request, send_from_directory
+import json
 import os
 import secrets
 
@@ -14,6 +15,7 @@ else:
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 MESH_DIR = PROJECT_ROOT / "export_preview"
+FULL_MESH_DIR = PROJECT_ROOT / "export_all_areas"
 app = Flask(__name__, static_folder=str(PROJECT_ROOT / "static"), static_url_path="/static")
 app.secret_key = os.environ.get('BRAIN_VIEWER_SESSION_SECRET') or secrets.token_hex(32)
 app.config.update(MAX_CONTENT_LENGTH=11 * 1024 * 1024, SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Strict')
@@ -65,13 +67,19 @@ HTML = r"""
 <div id="info">
   <h3>Gehirn – alle Regionen</h3>
   <p id="status" role="status">{{ count }} Regionen gefunden – 3D-Ansicht wird gestartet …</p>
-  <p class="hint">Ziehen: drehen · Zwei Finger: zoomen &amp; verschieben · Am PC: Mausrad zum Zoomen</p>
   <button id="reset" disabled>Ansicht zurücksetzen</button>
   <p><label class="rotation-option"><input id="auto-rotate" type="checkbox" checked> Langsam drehen</label></p>
-  <label>Bildauflösung
-    <select id="resolution"><option value="0.75">Sparsam</option><option value="1" selected>Standard</option><option value="native">Hoch (Displayauflösung)</option></select>
-  </label>
-  <p class="hint">Optimierte 3D-Geometrie · Für weniger Grafiklast die Drehung ausschalten.</p>
+  <div class="viewer-settings">
+    <label for="mesh-detail">Mesh-Details
+      <select id="mesh-detail">
+        <option value="optimized"{% if mesh_detail == 'optimized' %} selected{% endif %}>Optimiert · {{ preview_triangles }} Dreiecke</option>
+        <option value="full"{% if mesh_detail == 'full' %} selected{% endif %}{% if not full_mesh_available %} disabled{% endif %}>Voll · {{ full_triangles }} Dreiecke</option>
+      </select>
+    </label>
+    <label for="resolution">Bildauflösung
+      <select id="resolution"><option value="0.75">Sparsam</option><option value="1" selected>Standard</option><option value="native">Hoch (Displayauflösung)</option></select>
+    </label>
+  </div>
   <details id="region-legend" open>
     <summary>Legende · Areale ein-/ausblenden</summary>
     <div class="legend-actions">
@@ -83,7 +91,7 @@ HTML = r"""
       {% for name in meshes %}
       <li>
         <label class="region-row" for="region-{{ loop.index0 }}" title="{{ name }}">
-          <input id="region-{{ loop.index0 }}" type="checkbox" checked disabled>
+          <input id="region-{{ loop.index0 }}" type="checkbox"{% if name != 'CSF.obj' %} checked{% endif %} disabled>
           <span id="region-color-{{ loop.index0 }}" class="region-color" aria-hidden="true"></span>
           <span class="region-name">{{ name[:-4] }}</span>
           <span id="region-state-{{ loop.index0 }}" class="region-state">Lädt …</span>
@@ -94,7 +102,6 @@ HTML = r"""
   </details>
   <section id="cuts" aria-label="Schnittvolumen">
     <strong>Schnittvolumen</strong>
-    <p class="hint">Je Achse bleibt der Bereich zwischen Von und Bis sichtbar.</p>
     {% for axis, description in [('x', 'links ↔ rechts'), ('y', 'hinten ↔ vorne'), ('z', 'unten ↔ oben')] %}
     <fieldset disabled id="cut-{{ axis }}">
       <legend>{{ axis|upper }} · {{ description }}</legend>
@@ -120,34 +127,17 @@ HTML = r"""
   <form id="assistant-form">
     <label for="assistant-input">Frage oder Anweisung</label>
     <textarea id="assistant-input" rows="3" maxlength="4000" placeholder="Zeige mir den linken Hippocampus und erkläre seine Funktion." required></textarea>
-    <div class="assistant-options">
-      <label><input id="assistant-web" type="checkbox" checked> Websuche</label>
+    <div class="assistant-settings">
       <label><input id="assistant-speak" type="checkbox" checked> Vorlesen</label>
-      <label>Stimme <select id="assistant-voice"><option value="marin">Marin</option><option value="cedar">Cedar</option></select></label>
+      <label class="assistant-voice">Stimme <select id="assistant-voice"><option value="marin">Marin</option><option value="cedar">Cedar</option></select></label>
     </div>
-    <div class="assistant-options">
+    <div class="assistant-actions">
       <button id="assistant-send" disabled>Senden</button>
       <button id="assistant-mic" type="button" disabled aria-pressed="false">Mikrofon starten</button>
       <button id="assistant-new" type="button">Neues Gespräch</button>
-      <button id="clear-highlight" type="button">Markierung löschen</button>
     </div>
   </form>
-  <div class="assistant-options"><button id="realtime-start" type="button" disabled aria-pressed="false">Realtime starten</button><button id="realtime-interrupt" type="button" disabled>Antwort unterbrechen</button></div>
-  <p id="realtime-status" role="status" class="hint">Live-Sprachgespräch · Starten und frei sprechen. Stoppen schaltet das Mikrofon aus.</p>
-  <p class="hint">Realtime überträgt Audio während der Verbindung an OpenAI und antwortet mit KI-Stimme. Jedes Starten beginnt ein eigenes Sprachgespräch. Stimme und Websuche vorher auswählen.</p>
-  <audio id="realtime-audio" controls hidden aria-label="Realtime-Sprachausgabe"></audio>
-  <details class="usage-panel" open>
-    <summary>Verbrauch &amp; Limits</summary>
-    <p id="realtime-usage" class="hint">Noch kein Realtime-Verbrauch gemeldet.</p>
-    <div id="realtime-limits" aria-label="Zuletzt gemeldete Rate-Limits"><p class="hint">Noch keine Limitdaten.</p></div>
-    <p class="hint">Tokens dieser Realtime-Sitzung, aktualisiert nach jeder Antwort, inklusive gemeldeter abgebrochener Antworten. Cache-Tokens sind bereits in der Eingabe enthalten. Neustart setzt den Zähler zurück, nicht die API-Limits. Nach einem kurzfristigen Rate-Limit wartet die App bis zur gemeldeten Reset-Zeit und versucht die letzte Antwort einmal erneut. Textchat, separate Transkription, Webrecherche und andere Geräte sind hier nicht mitgezählt.</p>
-    <p class="hint">Kontostand: hier nicht abrufbar. <a href="https://platform.openai.com/settings/organization/billing/overview" target="_blank" rel="noopener noreferrer">Guthaben bei OpenAI öffnen ↗</a></p>
-    <a href="https://platform.openai.com/settings/organization/limits" target="_blank" rel="noopener noreferrer">Kontolimits ansehen ↗</a>
-  </details>
-  <div class="assistant-options"><button id="speech-stop" type="button" disabled>Sprachausgabe stoppen</button></div>
-  <p id="speech-status" role="status" class="hint">KI-generierte Stimme · OpenAI</p>
   <audio id="assistant-audio" controls hidden aria-label="Gesprochene Antwort"></audio>
-  <p class="hint">Mikrofon starten → sprechen → Stoppen &amp; senden. Maximal 60 Sekunden. Audio und Fragen werden zur Verarbeitung an OpenAI gesendet; die 3D-Dateien bleiben lokal.</p>
 </details>
 <nav class="mobile-nav" aria-label="Ansicht wählen">
   <button type="button" data-panel="scene" aria-pressed="true">3D-Ansicht</button>
@@ -155,6 +145,7 @@ HTML = r"""
   <button type="button" data-panel="assistant" aria-controls="assistant-panel" aria-pressed="false">Assistent</button>
 </nav>
 <script type="module" src="{{ url_for('static', filename='viewer_ui.js') }}"></script>
+<script type="module" src="{{ url_for('static', filename='assistant_bridge.js') }}"></script>
 <script id="mesh-list" type="application/json">{{ meshes|tojson }}</script>
 <script>
   import({{ url_for('static', filename='brain_viewer.js')|tojson }}).catch((error) => {
@@ -172,11 +163,31 @@ HTML = r"""
 @app.route("/")
 def index():
     meshes = sorted(p.name for p in MESH_DIR.iterdir() if p.is_file() and p.suffix.lower() == ".obj")
-    return render_template_string(HTML, meshes=meshes, count=len(meshes))
+    full_mesh_available = all((FULL_MESH_DIR / name).is_file() for name in meshes)
+    mesh_detail = request.args.get('detail', 'optimized')
+    if mesh_detail not in ('optimized', 'full') or (mesh_detail == 'full' and not full_mesh_available):
+        mesh_detail = 'optimized'
+    try:
+        manifest = json.loads((MESH_DIR / 'manifest.json').read_text(encoding='utf-8'))
+        preview_count = sum(int(item['preview']) for item in manifest)
+        full_count = sum(int(item['original']) for item in manifest)
+    except (OSError, ValueError, KeyError, TypeError):
+        preview_count = full_count = 0
+    triangle_label = lambda count: f'{count:,}'.replace(',', chr(0x2019)) if count else '–'
+    return render_template_string(
+        HTML, meshes=meshes, count=len(meshes), mesh_detail=mesh_detail,
+        full_mesh_available=full_mesh_available,
+        preview_triangles=triangle_label(preview_count), full_triangles=triangle_label(full_count))
 
 @app.route("/mesh/<path:filename>")
 def mesh(filename):
-    return send_from_directory(MESH_DIR, filename)
+    detail = request.args.get('detail', 'optimized')
+    if detail not in ('optimized', 'full'):
+        abort(400)
+    directory = FULL_MESH_DIR if detail == 'full' else MESH_DIR
+    if detail == 'full' and not (directory / filename).is_file():
+        abort(404)
+    return send_from_directory(directory, filename)
 
 if __name__ == "__main__":
     print(f"Serving surface files from: {MESH_DIR}")

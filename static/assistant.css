@@ -6,11 +6,18 @@
 .assistant-message.user { background: #233d59; }
 .assistant-message.error { color: #ffb7b7; }
 .assistant-message.action { color: #b9dfc5; font-size: 12px; }
+.assistant-message.streaming::after { content: '▍'; color: #80baff; animation: assistant-blink 0.9s steps(2, start) infinite; }
 .assistant-message a { color: #9bcaff; }
 #assistant-input { box-sizing: border-box; width: 100%; resize: vertical; margin: 6px 0; background: #172232; color: #fff; border: 1px solid #63748e; border-radius: 5px; padding: 8px; font: inherit; }
 .assistant-options { display: flex; flex-wrap: wrap; gap: 10px; margin: 8px 0; font-size: 13px; }
+.assistant-settings { display: flex; align-items: center; gap: 12px; margin: 10px 0; font-size: 13px; }
+.assistant-settings label { display: inline-flex; align-items: center; gap: 7px; min-height: 40px; }
+.assistant-settings .assistant-voice { margin-left: auto; }
+.assistant-actions { display: grid; grid-template-columns: .65fr 1.25fr 1.2fr; gap: 8px; margin-top: 8px; }
+.assistant-actions button { min-width: 0; padding-inline: 6px; white-space: nowrap; font-size: 11px; }
 #assistant-panel button { cursor: pointer; }
-#assistant-audio, #realtime-audio { width: 100%; }
+#assistant-audio { width: 100%; }
 #assistant-panel button:disabled { cursor: not-allowed; }
 #assistant-form[aria-busy="true"] button:disabled { cursor: progress; }
 @media (max-width: 850px) { #assistant-panel { right: 8px; bottom: 8px; } #assistant-panel[open] { max-height: 60vh; } }
+@keyframes assistant-blink { 50% { opacity: 0; } }

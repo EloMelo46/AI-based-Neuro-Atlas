@@ -13,11 +13,24 @@ if __package__ in (None, ''):
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from main.brain_viewer import app, MESH_DIR
-from main.brain_assistant import validate_action, validate_state, APIError, generate_speech
+from main.brain_assistant import (validate_action, validate_state, APIError,
+    generate_speech, transcribe_audio, tools_for)
 from main.realtime_assistant import create_realtime_secret
 
 
 class AssistantTests(unittest.TestCase):
+    @staticmethod
+    def stream_events(response):
+        return [json.loads(line) for line in response.get_data(as_text=True).splitlines() if line]
+
+    @classmethod
+    def stream_result(cls, response):
+        events = cls.stream_events(response)
+        error = next((event.get('error') for event in events if event.get('type') == 'error'), None)
+        if error:
+            raise APIError(error)
+        return next(event['data'] for event in events if event.get('type') == 'result')
+
     def test_realtime_secret_reports_precise_failures_and_retries_network(self):
         with patch.dict(os.environ, {'OPENAI_API_KEY': 'test-key'}), \
                 patch('main.realtime_assistant.time.sleep') as sleep, \
@@ -46,10 +59,9 @@ class AssistantTests(unittest.TestCase):
 
     def test_opacity(self):
         for opacity in [0, 0.3, 1]:
-            response = self.client.post('/api/assistant/realtime/tool', headers=self.headers,
-                json={'state': self.state, 'name': 'set_opacity', 'arguments': {'region_ids': ['Left-Hippocampus'], 'opacity': opacity}})
-            self.assertEqual(response.status_code, 200)
-            self.assertEqual(response.json['action']['arguments']['opacity'], opacity)
+            action = validate_action('set_opacity',
+                {'region_ids': ['Left-Hippocampus'], 'opacity': opacity}, self.state['loaded'])
+            self.assertEqual(action['arguments']['opacity'], opacity)
         for opacity in [-1, 1.1, True, '0.5', float('nan')]:
             with self.assertRaises(ValueError):
                 validate_action('set_opacity', {'region_ids': ['Left-Hippocampus'], 'opacity': opacity}, self.state['loaded'])
@@ -57,54 +69,19 @@ class AssistantTests(unittest.TestCase):
         clean = validate_state(self.state, self.state['loaded'])
         self.assertEqual(clean['opacities']['Left-Hippocampus'], 0.3)
         self.assertEqual(clean['opacities']['Right-Hippocampus'], 1)
+        definitions = tools_for(self.state['loaded'])
+        self.assertNotIn('focus_regions', [item['name'] for item in definitions])
+        isolate = next(item for item in definitions if item['name'] == 'isolate_regions')
+        self.assertIn('1% opacity', isolate['description'])
 
-    def test_realtime_session_and_tools(self):
-        with patch('main.realtime_assistant.create_realtime_secret', return_value='temporary-test') as create:
-            response = self.client.post('/api/assistant/realtime/session', headers=self.headers,
-                json={'state': self.state, 'voice': 'cedar', 'web_search': True})
-            self.assertEqual(response.status_code, 200)
-            self.assertEqual(response.headers['Cache-Control'], 'no-store')
-            config = create.call_args.args[0]
-            self.assertEqual(config['audio']['output']['voice'], 'cedar')
-            self.assertEqual(config['audio']['input']['turn_detection'], {
-                'type': 'semantic_vad', 'eagerness': 'low',
-                'create_response': True, 'interrupt_response': True})
-            self.assertEqual(config['max_output_tokens'], 4000)
-            self.assertEqual(config['reasoning'], {'effort': 'low'})
-            self.assertEqual(config['truncation']['retention_ratio'], 0.8)
-            self.assertEqual(config['truncation']['token_limits']['post_instructions'], 8000)
-            self.assertIn('search_web', [t['name'] for t in config['tools']])
-            region_tools = [t for t in config['tools']
-                if 'region_ids' in t['parameters']['properties']]
-            self.assertEqual(len(region_tools), 5)
-            for item in region_tools:
-                self.assertEqual(item['parameters']['properties']['region_ids']['items']['enum'], self.state['loaded'])
-            opacity = next(t for t in config['tools'] if t['name'] == 'set_opacity')
-            self.assertIn('makes every specified region visible', opacity['description'])
-            self.assertIn('höchstens drei kurzen Sätzen', config['instructions'])
-            self.assertIn('alle angeforderten Vieweränderungen vollständig', config['instructions'])
-        response = self.client.post('/api/assistant/realtime/tool', headers=self.headers,
-            json={'state': self.state, 'name': 'highlight_regions', 'arguments': {'region_ids': ['Left-Hippocampus']}})
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json['action']['name'], 'highlight_regions')
-        for name, args in [('eval', {}), ('set_cut', {'axis': 'x', 'min': 90, 'max': 10}),
-                           ('search_web', {'query': 'brain'})]:
-            response = self.client.post('/api/assistant/realtime/tool', headers=self.headers,
-                json={'state': self.state, 'name': name, 'arguments': args})
-            self.assertEqual(response.status_code, 400)
-        self.assertEqual(self.client.post('/api/assistant/realtime/session', json={'state': self.state}).status_code, 403)
-        with patch('main.brain_assistant.call_openai', return_value={'output': [
-            {'type': 'message', 'content': [{'type': 'output_text', 'text': 'Rechercheantwort.',
-                'annotations': [{'type': 'url_citation', 'url': 'https://example.org',
-                    'start_index': 0, 'end_index': 17}]}]}]}) as api:
-            response = self.client.post('/api/assistant/realtime/tool', headers=self.headers,
-                json={'state': self.state, 'name': 'search_web', 'arguments': {'query': 'Hippocampus'}, 'web_search': True})
-            self.assertEqual(response.status_code, 200)
-            self.assertEqual(response.json['messages'][0]['citations'][0]['url'], 'https://example.org')
-            self.assertEqual(api.call_args.args[0]['tools'], [{'type': 'web_search'}])
+    def test_realtime_routes_are_disabled(self):
+        self.assertEqual(self.client.post('/api/assistant/realtime/session',
+            headers=self.headers, json={'state': self.state}).status_code, 404)
+        self.assertEqual(self.client.post('/api/assistant/realtime/tool',
+            headers=self.headers, json={'state': self.state}).status_code, 404)
 
     def test_speech_endpoint(self):
-        with patch('main.brain_assistant.generate_speech', return_value=b'ID3-test') as speech:
+        with patch('main.brain_assistant.open_speech', return_value=io.BytesIO(b'ID3-test')) as speech:
             response = self.client.post('/api/assistant/speech', headers=self.headers,
                 json={'text': 'Hallo.', 'voice': 'cedar'})
             self.assertEqual(response.status_code, 200)
@@ -113,6 +90,39 @@ class AssistantTests(unittest.TestCase):
             speech.assert_called_once_with('Hallo.', 'cedar')
         for text, voice in [('', 'marin'), ('x' * 2001, 'marin'), ('Hallo', 'fake')]:
             with self.assertRaises(ValueError): generate_speech(text, voice)
+
+    def test_audio_model_request_defaults(self):
+        with patch.dict(os.environ, {'OPENAI_API_KEY': 'test-only'}, clear=True), \
+                patch('main.brain_assistant.urllib.request.urlopen',
+                      return_value=io.BytesIO(b'ID3-test')) as urlopen:
+            self.assertEqual(generate_speech('Hallo.', 'marin'), b'ID3-test')
+            payload = json.loads(urlopen.call_args.args[0].data)
+            self.assertEqual(payload, {
+                'model': 'gpt-4o-mini-tts', 'voice': 'marin', 'input': 'Hallo.',
+            'response_format': 'mp3', 'stream_format': 'audio', 'speed': 1.2,
+                'instructions': ('Sprich natürliches, klares Hochdeutsch mit warmer, ruhiger und kompetenter Stimme. '
+                    'Nutze ein entspanntes Erklärtempo, dezente lebendige Betonung und kurze sinnvolle Pausen '
+                    'zwischen Gedankengängen. Sprich anatomische sowie lateinische Fachbegriffe besonders '
+                    'deutlich aus. Vermeide monotones Ablesen und übertriebene Theatralik.'),
+            })
+        with patch.dict(os.environ, {'OPENAI_API_KEY': 'test-only'}, clear=True), \
+                patch('main.brain_assistant.urllib.request.urlopen',
+                      return_value=io.BytesIO(b'{"text":"Hippocampus"}')) as urlopen:
+            self.assertEqual(transcribe_audio(b'audio', 'audio/webm'), 'Hippocampus')
+            body = urlopen.call_args.args[0].data
+            self.assertIn(b'gpt-4o-mini-transcribe', body)
+            self.assertIn(b'name="language"\r\n\r\nde', body)
+            self.assertIn(b'name="response_format"\r\n\r\njson', body)
+
+    def test_audio_network_error_is_diagnosable(self):
+        failure = urllib.error.URLError(PermissionError(13, 'socket access denied'))
+        with patch.dict(os.environ, {'OPENAI_API_KEY': 'test-only'}, clear=True), \
+                patch('main.brain_assistant.urllib.request.urlopen', side_effect=failure), \
+                self.assertLogs('main.brain_assistant', level='WARNING') as logs:
+            with self.assertRaisesRegex(APIError, 'Netzwerkzugriff des Python-Servers'):
+                transcribe_audio(b'audio', 'audio/webm')
+        self.assertIn('OpenAI transcription network failure', '\n'.join(logs.output))
+        self.assertIn('socket access denied', '\n'.join(logs.output))
 
     def test_audio_upload(self):
         with patch('main.brain_assistant.transcribe_audio', return_value='Zeige den Hippocampus.') as transcribe:
@@ -127,6 +137,47 @@ class AssistantTests(unittest.TestCase):
         self.assertEqual(self.client.post('/api/assistant/transcribe', headers=self.headers,
             data={'audio': (io.BytesIO(b'bad'), 'bad.txt', 'text/plain')}).status_code, 400)
 
+    def test_non_realtime_config_and_page(self):
+        with patch.dict(os.environ, {'OPENAI_API_KEY': 'test-only'}, clear=True):
+            config = self.client.get('/api/assistant/config').get_json()
+        self.assertEqual(config['model'], 'gpt-5.6-luna')
+        self.assertEqual(config['transcribe_model'], 'gpt-4o-mini-transcribe')
+        self.assertEqual(config['speech_model'], 'gpt-4o-mini-tts')
+        self.assertFalse(config['realtime'])
+        self.assertEqual(config['settings']['reasoning_effort'], 'low')
+        self.assertEqual(config['settings']['verbosity'], 'medium')
+        self.assertEqual(config['settings']['max_output_tokens'], 1600)
+        self.assertEqual(config['settings']['tool_choice'], 'auto')
+        self.assertTrue(config['settings']['stream'])
+        page = self.client.get('/').get_data(as_text=True)
+        self.assertIn('src="/static/assistant_bridge.js"', page)
+        self.assertNotIn('id="realtime-start"', page)
+        for removed in ('assistant-web', 'assistant-interrupt', 'clear-highlight',
+                        'speech-stop', 'speech-status'):
+            self.assertNotIn(f'id="{removed}"', page)
+        self.assertNotIn('Spracheingabe: gpt-4o-mini-transcribe', page)
+        self.assertNotIn('Nicht-Realtime: Mikrofon starten', page)
+        self.assertNotIn('Ziehen: drehen · Zwei Finger:', page)
+        self.assertNotIn('Je Achse bleibt der Bereich', page)
+        self.assertIn('id="mesh-detail"', page)
+        self.assertIn(f"816{chr(0x2019)}604 Dreiecke", page)
+        self.assertIn(f"4{chr(0x2019)}045{chr(0x2019)}140 Dreiecke", page)
+        csf_start = page.index('title="CSF.obj"')
+        csf_row = page[csf_start:page.index('</label>', csf_start)]
+        self.assertNotIn(' checked', csf_row)
+
+    def test_mesh_detail_routes(self):
+        optimized = self.client.get('/mesh/CC_Central.obj?detail=optimized')
+        full = self.client.get('/mesh/CC_Central.obj?detail=full')
+        self.assertEqual(optimized.status_code, 200)
+        self.assertEqual(full.status_code, 200)
+        self.assertGreater(len(full.data), len(optimized.data))
+        optimized.close()
+        full.close()
+        self.assertEqual(self.client.get('/mesh/CC_Central.obj?detail=invalid').status_code, 400)
+        page = self.client.get('/?detail=full').get_data(as_text=True)
+        self.assertIn('<option value="full" selected', page)
+
     def setUp(self):
         self.client = app.test_client()
         self.headers = {'X-Brain-Viewer': '1'}
@@ -140,20 +191,35 @@ class AssistantTests(unittest.TestCase):
             {'status': 'completed', 'output': [{'type': 'message', 'content': [{'type': 'output_text',
                 'text': 'Der linke Hippocampus ist markiert.', 'annotations': []}]}]},
         ]
-        with patch('main.brain_assistant.call_openai', side_effect=responses) as api:
-            result = self.client.post('/api/assistant/chat', headers=self.headers,
-                json={'message': 'Markiere den linken Hippocampus', 'state': self.state}).get_json()
+        def events(*_args):
+            response = responses.pop(0)
+            for item in response.get('output', []):
+                for part in item.get('content', []):
+                    if part.get('type') == 'output_text':
+                        yield {'type': 'response.output_text.delta', 'delta': part['text']}
+            yield {'type': 'response.completed', 'response': response}
+        with patch('main.brain_assistant.stream_openai', side_effect=events) as api:
+            result = self.stream_result(self.client.post('/api/assistant/chat', headers=self.headers,
+                json={'message': 'Markiere den linken Hippocampus', 'state': self.state}))
             self.assertEqual(result['actions'][0]['name'], 'highlight_regions')
             self.assertEqual(api.call_count, 1)
             self.state['highlighted'] = ['Left-Hippocampus']
-            reply = self.client.post('/api/assistant/chat', headers=self.headers, json={
+            response = self.client.post('/api/assistant/chat', headers=self.headers, json={
                 'turn_id': result['turn_id'], 'results': [{'call_id': 'call_1', 'ok': True}], 'state': self.state})
-            self.assertEqual(reply.status_code, 200)
-            self.assertIn('markiert', reply.get_json()['messages'][0]['text'])
+            self.assertTrue(any(event.get('type') == 'delta' for event in self.stream_events(response)))
+            reply = self.stream_result(response)
+            self.assertEqual(response.status_code, 200)
+            self.assertIn('markiert', reply['messages'][0]['text'])
             payload = api.call_args.args[0]
             tool_output = next(i for i in payload['input'] if i.get('type') == 'function_call_output')
             self.assertTrue(json.loads(tool_output['output'])['ok'])
             self.assertFalse(payload['store'])
+            self.assertEqual(payload['model'], 'gpt-5.6-luna')
+            self.assertEqual(payload['reasoning'], {'effort': 'low'})
+            self.assertEqual(payload['text'], {'verbosity': 'medium'})
+            self.assertEqual(payload['max_output_tokens'], 1600)
+            self.assertTrue(payload['parallel_tool_calls'])
+            self.assertIn({'type': 'web_search'}, payload['tools'])
 
     def test_invalid_actions_and_origin(self):
         for name, args in [('eval', {}), ('highlight_regions', {'region_ids': ['fake']}),
@@ -165,10 +231,12 @@ class AssistantTests(unittest.TestCase):
             headers={**self.headers, 'Origin': 'https://example.org'}).status_code, 403)
 
     def test_api_failure_and_forged_result(self):
-        with patch('main.brain_assistant.call_openai', side_effect=APIError('Verbindung fehlgeschlagen.')):
+        with patch('main.brain_assistant.stream_openai', side_effect=APIError('Verbindung fehlgeschlagen.')):
             reply = self.client.post('/api/assistant/chat', headers=self.headers,
                 json={'message': 'Hallo', 'state': self.state})
-            self.assertEqual(reply.status_code, 502)
+            self.assertEqual(reply.status_code, 200)
+            self.assertIn('Verbindung fehlgeschlagen.',
+                next(event['error'] for event in self.stream_events(reply) if event['type'] == 'error'))
         reply = self.client.post('/api/assistant/chat', headers=self.headers,
             json={'turn_id': 'invented', 'results': [], 'state': self.state})
         self.assertEqual(reply.status_code, 400)

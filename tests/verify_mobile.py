@@ -46,11 +46,15 @@ try:
           const viewer = (await import('/static/brain_viewer.js')).assistantViewer;
           const loaded = viewer.getState().loaded;
           const targets = loaded.filter(id => id.endsWith('Thalamus'));
-          const background = loaded.filter(id => !targets.includes(id));
+          const background = loaded.filter(id => !targets.includes(id) && id !== 'CSF');
           viewer.execute({name: 'isolate_regions', arguments: {region_ids: targets}});
+          const focused = viewer.getState();
+          const focusCorrect = focused.visible.length === loaded.length - 1 && !focused.visible.includes('CSF') &&
+            background.every(id => focused.opacities[id] === 0.01) &&
+            targets.every(id => focused.opacities[id] === 1);
           viewer.execute({name: 'set_opacity', arguments: {region_ids: background, opacity: 0.05}});
           const state = viewer.getState();
-          return state.visible.length === loaded.length &&
+          return focusCorrect && state.visible.length === loaded.length - 1 && !state.visible.includes('CSF') &&
             background.every(id => state.opacities[id] === 0.05) &&
             targets.every(id => state.opacities[id] === 1);
         }"""), 'Setting opacity did not reactivate hidden background regions'
@@ -69,6 +73,6 @@ try:
         page.screenshot(path=str(OUTPUT_DIR / 'desktop-design.png'))
         assert not errors, errors
         browser.close()
-        print('PASS: mobile navigation, opacity reactivates hidden regions, portrait/landscape, no horizontal overflow, region controls, text input, desktop panels, no JS errors.')
+        print('PASS: mobile navigation, 1% focus context, opacity reactivates hidden regions, portrait/landscape, no horizontal overflow, no JS errors.')
 finally:
     server.shutdown()

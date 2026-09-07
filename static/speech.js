@@ -1,27 +1,106 @@
-// One cancellable playback queue; late network responses never restart audio.
-export function initSpeech() {
+// One cancellable, low-latency playback queue. MP3 bytes are played as they arrive.
+export function initSpeech({ onError = () => {} } = {}) {
   const audio = document.getElementById('assistant-audio');
-  const status = document.getElementById('speech-status');
-  const stopButton = document.getElementById('speech-stop');
   let generation = 0;
   let controller = null;
+  let reader = null;
+  let mediaSource = null;
   let blobURL = null;
   let releasePlayback = null;
+
   function stop() {
     generation++;
     controller?.abort();
     controller = null;
+    void reader?.cancel().catch(() => {});
+    reader = null;
     audio.pause();
     audio.removeAttribute('src');
     audio.load();
     releasePlayback?.();
     releasePlayback = null;
+    mediaSource = null;
     if (blobURL) URL.revokeObjectURL(blobURL);
     blobURL = null;
     audio.hidden = true;
-    stopButton.disabled = true;
-    status.textContent = 'KI-generierte Stimme · OpenAI';
   }
+
+  function playbackFinished(current) {
+    return new Promise((resolve, reject) => {
+      const clear = () => {
+        audio.onended = null;
+        audio.onerror = null;
+        releasePlayback = null;
+      };
+      releasePlayback = () => { clear(); resolve(); };
+      audio.onended = () => { clear(); resolve(); };
+      audio.onerror = () => {
+        clear();
+        reject(new Error('Audio konnte nicht abgespielt werden.'));
+      };
+      audio.play().catch(error => {
+        if (current !== generation) resolve();
+        else if (error.name === 'NotAllowedError') return;
+        else { clear(); reject(error); }
+      });
+    });
+  }
+
+  async function append(source, bytes, current) {
+    if (current !== generation) throw new DOMException('Abgebrochen', 'AbortError');
+    await new Promise((resolve, reject) => {
+      const clear = () => {
+        source.removeEventListener('updateend', done);
+        source.removeEventListener('error', failed);
+      };
+      const done = () => { clear(); resolve(); };
+      const failed = () => { clear(); reject(new Error('Audiostream konnte nicht verarbeitet werden.')); };
+      source.addEventListener('updateend', done, { once: true });
+      source.addEventListener('error', failed, { once: true });
+      source.appendBuffer(bytes);
+    });
+  }
+
+  async function playResponse(response, current) {
+    const canStream = response.body && window.MediaSource && MediaSource.isTypeSupported('audio/mpeg');
+    if (!canStream) {
+      const blob = await response.blob();
+      if (current !== generation) return;
+      blobURL = URL.createObjectURL(blob);
+      audio.src = blobURL;
+      audio.hidden = false;
+      await playbackFinished(current);
+      return;
+    }
+
+    mediaSource = new MediaSource();
+    blobURL = URL.createObjectURL(mediaSource);
+    audio.src = blobURL;
+    audio.hidden = false;
+    await new Promise((resolve, reject) => {
+      mediaSource.addEventListener('sourceopen', resolve, { once: true });
+      mediaSource.addEventListener('error', () => reject(new Error('Audiostream konnte nicht geöffnet werden.')), { once: true });
+    });
+    if (current !== generation) return;
+    const source = mediaSource.addSourceBuffer('audio/mpeg');
+    reader = response.body.getReader();
+    let playback = null;
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (value?.byteLength) {
+        await append(source, value, current);
+        if (!playback) {
+          playback = playbackFinished(current);
+        }
+      }
+    }
+    reader = null;
+    if (!playback) throw new Error('OpenAI hat keine Audiodaten geliefert.');
+    if (mediaSource.readyState === 'open' && !source.updating) mediaSource.endOfStream();
+    await playback;
+  }
+
   async function speak(parts, voice) {
     stop();
     const current = generation;
@@ -43,15 +122,12 @@ export function initSpeech() {
       chunks.push(text.slice(0, end));
       text = text.slice(end).trimStart();
     }
-    stopButton.disabled = false;
     try {
       for (const chunk of chunks) {
         if (current !== generation) return;
-        status.textContent = 'KI-Stimme wird erzeugt …';
         controller = new AbortController();
         const timeout = setTimeout(() => controller?.abort(), 75000);
         let response;
-        let blob;
         try {
           response = await fetch('/api/assistant/speech', { method: 'POST', headers: {
             'Content-Type': 'application/json', 'X-Brain-Viewer': '1',
@@ -60,34 +136,19 @@ export function initSpeech() {
             const data = await response.json();
             throw new Error(data.error || 'Sprachausgabe fehlgeschlagen.');
           }
-          blob = await response.blob();
+          await playResponse(response, current);
         } finally { clearTimeout(timeout); }
-        if (current !== generation) return;
-        if (blobURL) URL.revokeObjectURL(blobURL);
-        blobURL = URL.createObjectURL(blob);
-        audio.src = blobURL;
-        audio.hidden = false;
-        status.textContent = 'KI-generierte Stimme · Wiedergabe';
-        await new Promise((resolve, reject) => {
-          const clear = () => { audio.onended = null; audio.onerror = null; releasePlayback = null; };
-          releasePlayback = () => { clear(); resolve(); };
-          audio.onended = () => { clear(); resolve(); };
-          audio.onerror = () => { clear(); reject(new Error('Audio konnte nicht abgespielt werden.')); };
-          audio.play().catch(error => {
-            if (current !== generation) { resolve(); }
-            else if (error.name === 'NotAllowedError') status.textContent = 'Bitte im Audioplayer auf Play klicken.';
-            else { clear(); reject(error); }
-          });
-        });
       }
       if (current === generation) stop();
     } catch (error) {
       if (current !== generation) return;
       stop();
-      status.textContent = error.name === 'AbortError' ? 'Zeitlimit bei der Sprachausgabe. Textantwort bleibt verfügbar.' : error.message;
+      onError(error.name === 'AbortError'
+        ? 'Zeitlimit bei der Sprachausgabe. Die Textantwort bleibt verfügbar.'
+        : error.message);
     }
   }
-  stopButton.addEventListener('click', stop);
+
   document.getElementById('assistant-speak').addEventListener('change', stop);
   document.getElementById('assistant-voice').addEventListener('change', stop);
   window.addEventListener('pagehide', stop);

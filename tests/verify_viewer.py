@@ -31,6 +31,15 @@ try:
         """)
         page.goto('http://127.0.0.1:5051')
         page.wait_for_function("document.querySelector('#status').textContent === '43 von 43 Regionen geladen'", timeout=120000)
+        csf = page.locator('.region-row[title="CSF.obj"] input')
+        assert not csf.is_checked(), 'CSF must be opt-in at startup'
+        page.locator('#show-regions').click()
+        assert not csf.is_checked(), 'Show all must leave CSF disabled'
+        csf.check()
+        assert csf.is_checked(), 'CSF must remain explicitly selectable'
+        page.locator('#show-regions').click()
+        assert not csf.is_checked(), 'Show all must restore the default CSF state'
+        assert page.locator('#mesh-detail').input_value() == 'optimized'
         page.locator('#auto-rotate').uncheck()
         page.wait_for_timeout(2000)
         before = page.evaluate('window.framesDrawn')
@@ -58,7 +67,8 @@ try:
             assert page.locator(f'#{axis}-max').input_value() == '100'
         page.locator('#resolution').select_option('0.75')
         page.wait_for_timeout(500)
-        assert page.locator('canvas').evaluate('el => el.width') == 960
+        canvas_width, css_width = page.locator('canvas').evaluate('el => [el.width, el.clientWidth]')
+        assert abs(canvas_width - round(css_width * 0.75)) <= 1
         before = page.evaluate('window.framesDrawn')
         page.mouse.move(900, 400)
         page.mouse.down()
@@ -73,8 +83,13 @@ try:
           }
           return performance.now() - window.lastDrawTime > 600;
         }""", polling=200, timeout=20000)
+        page.locator('#mesh-detail').select_option('full')
+        page.wait_for_function("document.querySelector('#status').textContent === '43 von 43 Regionen geladen'", timeout=180000)
+        assert page.url.endswith('?detail=full')
+        assert page.locator('#mesh-detail').input_value() == 'full'
+        assert not page.locator('.region-row[title="CSF.obj"] input').is_checked()
         assert not errors, errors
-        print('PASS: 43 regions, idle rendering, three-axis cuts, fill toggle, visibility, reset, resolution, no console errors.')
+        print('PASS: optimized/full mesh details, CSF opt-in, 43 regions, idle rendering, cuts, visibility, resolution, no console errors.')
         browser.close()
 finally:
     server.shutdown()
