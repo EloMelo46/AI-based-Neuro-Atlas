@@ -1,0 +1,432 @@
+[
+  {
+    "name": "3rd-Ventricle.obj",
+    "original": 2496,
+    "preview": 498,
+    "closed": true,
+    "source_size": 46155,
+    "source_mtime_ns": 1788730983001141200,
+    "relative_volume_change": 0.04012616085509013,
+    "max_bounds_change": 0.0
+  },
+  {
+    "name": "4th-Ventricle.obj",
+    "original": 4980,
+    "preview": 996,
+    "closed": true,
+    "source_size": 90867,
+    "source_mtime_ns": 1788730989222726800,
+    "relative_volume_change": 0.008207157868900139,
+    "max_bounds_change": 0.0
+  },
+  {
+    "name": "Brain-Stem.obj",
+    "original": 17784,
+    "preview": 3554,
+    "closed": true,
+    "source_size": 321306,
+    "source_mtime_ns": 1788730995587939300,
+    "relative_volume_change": 0.00047196558973228164,
+    "max_bounds_change": 0.0
+  },
+  {
+    "name": "CC_Anterior.obj",
+    "original": 2148,
+    "preview": 2148,
+    "closed": true,
+    "source_size": 39885,
+    "source_mtime_ns": 1788731198116584400,
+    "relative_volume_change": 0.0,
+    "max_bounds_change": 0.0
+  },
+  {
+    "name": "CC_Central.obj",
+    "original": 976,
+    "preview": 200,
+    "closed": true,
+    "source_size": 18786,
+    "source_mtime_ns": 1788731185944800800,
+    "relative_volume_change": 0.04533271180515097,
+    "max_bounds_change": 0.0
+  },
+  {
+    "name": "CC_Mid_Anterior.obj",
+    "original": 872,
+    "preview": 872,
+    "closed": true,
+    "source_size": 16929,
+    "source_mtime_ns": 1788731192002886100,
+    "relative_volume_change": 0.0,
+    "max_bounds_change": 0.0
+  },
+  {
+    "name": "CC_Mid_Posterior.obj",
+    "original": 1404,
+    "preview": 1404,
+    "closed": true,
+    "source_size": 26508,
+    "source_mtime_ns": 1788731179713556100,
+    "relative_volume_change": 0.0,
+    "max_bounds_change": 0.0
+  },
+  {
+    "name": "CC_Posterior.obj",
+    "original": 1496,
+    "preview": 1496,
+    "closed": true,
+    "source_size": 28152,
+    "source_mtime_ns": 1788731171987756100,
+    "relative_volume_change": 0.0,
+    "max_bounds_change": 0.0
+  },
+  {
+    "name": "CSF.obj",
+    "original": 732736,
+    "preview": 146546,
+    "closed": true,
+    "source_size": 13161645,
+    "source_mtime_ns": 1788731040944325600,
+    "relative_volume_change": 0.02458553763129734,
+    "max_bounds_change": 0.0
+  },
+  {
+    "name": "Left-Accumbens-area.obj",
+    "original": 1388,
+    "preview": 276,
+    "closed": true,
+    "source_size": 26229,
+    "source_mtime_ns": 1788731047161681000,
+    "relative_volume_change": 0.03924398625429548,
+    "max_bounds_change": 0.5
+  },
+  {
+    "name": "Left-Amygdala.obj",
+    "original": 2844,
+    "preview": 568,
+    "closed": true,
+    "source_size": 52419,
+    "source_mtime_ns": 1788731009094908500,
+    "relative_volume_change": 0.005852585258525833,
+    "max_bounds_change": 0.0
+  },
+  {
+    "name": "Left-Caudate.obj",
+    "original": 5908,
+    "preview": 1180,
+    "closed": true,
+    "source_size": 107568,
+    "source_mtime_ns": 1788730963274895200,
+    "relative_volume_change": 0.0015769784172661172,
+    "max_bounds_change": 0.0
+  },
+  {
+    "name": "Left-Cerebellum-Cortex.obj",
+    "original": 51680,
+    "preview": 10336,
+    "closed": true,
+    "source_size": 931086,
+    "source_mtime_ns": 1788730950963128400,
+    "relative_volume_change": 0.0005938406661560869,
+    "max_bounds_change": 0.0
+  },
+  {
+    "name": "Left-Cerebellum-White-Matter.obj",
+    "original": 20748,
+    "preview": 4148,
+    "closed": true,
+    "source_size": 374400,
+    "source_mtime_ns": 1788730944308612600,
+    "relative_volume_change": 0.006035367589684482,
+    "max_bounds_change": 0.0
+  },
+  {
+    "name": "Left-Cerebral-Cortex.obj",
+    "original": 594784,
+    "preview": 118956,
+    "closed": true,
+    "source_size": 10689624,
+    "source_mtime_ns": 1788730924096967300,
+    "relative_volume_change": 0.009573163609944535,
+    "max_bounds_change": 0.0
+  },
+  {
+    "name": "Left-Cerebral-White-Matter.obj",
+    "original": 320140,
+    "preview": 64028,
+    "closed": true,
+    "source_size": 5762202,
+    "source_mtime_ns": 1788730906783266300,
+    "relative_volume_change": 0.005438932616880221,
+    "max_bounds_change": 0.0
+  },
+  {
+    "name": "Left-Hippocampus.obj",
+    "original": 7164,
+    "preview": 1432,
+    "closed": true,
+    "source_size": 130188,
+    "source_mtime_ns": 1788731001801839300,
+    "relative_volume_change": 0.005745470421305465,
+    "max_bounds_change": 0.0
+  },
+  {
+    "name": "Left-Inf-Lat-Vent.obj",
+    "original": 2908,
+    "preview": 2908,
+    "closed": true,
+    "source_size": 53583,
+    "source_mtime_ns": 1788730936735740900,
+    "relative_volume_change": 0.0,
+    "max_bounds_change": 0.0
+  },
+  {
+    "name": "Left-Lateral-Ventricle.obj",
+    "original": 14508,
+    "preview": 2900,
+    "closed": true,
+    "source_size": 262398,
+    "source_mtime_ns": 1788730930468601700,
+    "relative_volume_change": 0.002340823970037431,
+    "max_bounds_change": 0.0
+  },
+  {
+    "name": "Left-Pallidum.obj",
+    "original": 2640,
+    "preview": 528,
+    "closed": true,
+    "source_size": 48747,
+    "source_mtime_ns": 1788730976751995700,
+    "relative_volume_change": 0.008339140012137758,
+    "max_bounds_change": 0.0
+  },
+  {
+    "name": "Left-Putamen.obj",
+    "original": 6876,
+    "preview": 1374,
+    "closed": true,
+    "source_size": 124992,
+    "source_mtime_ns": 1788730969482232600,
+    "relative_volume_change": 0.001581995515386625,
+    "max_bounds_change": 0.0
+  },
+  {
+    "name": "Left-Thalamus.obj",
+    "original": 6632,
+    "preview": 1326,
+    "closed": true,
+    "source_size": 120603,
+    "source_mtime_ns": 1788730957081786500,
+    "relative_volume_change": 0.0019149392777157992,
+    "max_bounds_change": 0.0
+  },
+  {
+    "name": "Left-VentralDC.obj",
+    "original": 6140,
+    "preview": 1228,
+    "closed": true,
+    "source_size": 111702,
+    "source_mtime_ns": 1788731053275324800,
+    "relative_volume_change": 0.009101015620583741,
+    "max_bounds_change": 0.0
+  },
+  {
+    "name": "lh.pial.obj",
+    "original": 301432,
+    "preview": 60286,
+    "closed": true,
+    "source_size": 5427494,
+    "source_mtime_ns": 1788731199060717100,
+    "relative_volume_change": 0.0013650871084611715,
+    "max_bounds_change": 0.12990951538085938
+  },
+  {
+    "name": "lh.white.obj",
+    "original": 301432,
+    "preview": 60286,
+    "closed": true,
+    "source_size": 5427496,
+    "source_mtime_ns": 1788731200105454200,
+    "relative_volume_change": 0.003631355882699472,
+    "max_bounds_change": 0.141937255859375
+  },
+  {
+    "name": "lh_hippo_mc.obj",
+    "original": 7164,
+    "preview": 1432,
+    "closed": true,
+    "source_size": 130175,
+    "source_mtime_ns": 1788730731367939300,
+    "relative_volume_change": 0.005745470421305465,
+    "max_bounds_change": 0.0
+  },
+  {
+    "name": "rh.pial.obj",
+    "original": 296480,
+    "preview": 59296,
+    "closed": true,
+    "source_size": 5338358,
+    "source_mtime_ns": 1788731201061195100,
+    "relative_volume_change": 0.00021354416956209654,
+    "max_bounds_change": 0.17401123046875
+  },
+  {
+    "name": "rh.white.obj",
+    "original": 296480,
+    "preview": 59296,
+    "closed": true,
+    "source_size": 5338360,
+    "source_mtime_ns": 1788731202016936000,
+    "relative_volume_change": 0.0005755436382268719,
+    "max_bounds_change": 0.16014862060546875
+  },
+  {
+    "name": "Right-Accumbens-area.obj",
+    "original": 1396,
+    "preview": 278,
+    "closed": true,
+    "source_size": 26376,
+    "source_mtime_ns": 1788731153839027400,
+    "relative_volume_change": 0.013416491406193387,
+    "max_bounds_change": 0.0
+  },
+  {
+    "name": "Right-Amygdala.obj",
+    "original": 2980,
+    "preview": 596,
+    "closed": true,
+    "source_size": 54870,
+    "source_mtime_ns": 1788731147785758800,
+    "relative_volume_change": 0.009739058968563752,
+    "max_bounds_change": 0.0
+  },
+  {
+    "name": "Right-Caudate.obj",
+    "original": 5872,
+    "preview": 1172,
+    "closed": true,
+    "source_size": 106923,
+    "source_mtime_ns": 1788731121836501600,
+    "relative_volume_change": 0.005960904459022975,
+    "max_bounds_change": 0.0
+  },
+  {
+    "name": "Right-Cerebellum-Cortex.obj",
+    "original": 51828,
+    "preview": 10364,
+    "closed": true,
+    "source_size": 934017,
+    "source_mtime_ns": 1788731109572979000,
+    "relative_volume_change": 0.001515213106757285,
+    "max_bounds_change": 0.0
+  },
+  {
+    "name": "Right-Cerebellum-White-Matter.obj",
+    "original": 21064,
+    "preview": 4212,
+    "closed": true,
+    "source_size": 380187,
+    "source_mtime_ns": 1788731101353191400,
+    "relative_volume_change": 0.006075814524299061,
+    "max_bounds_change": 0.0
+  },
+  {
+    "name": "Right-Cerebral-Cortex.obj",
+    "original": 585852,
+    "preview": 117168,
+    "closed": true,
+    "source_size": 10532811,
+    "source_mtime_ns": 1788731082545580200,
+    "relative_volume_change": 0.00876260316460753,
+    "max_bounds_change": 0.0
+  },
+  {
+    "name": "Right-Cerebral-White-Matter.obj",
+    "original": 318488,
+    "preview": 63696,
+    "closed": true,
+    "source_size": 5732805,
+    "source_mtime_ns": 1788731063283287500,
+    "relative_volume_change": 0.005757026837007406,
+    "max_bounds_change": 0.0
+  },
+  {
+    "name": "Right-Hippocampus.obj",
+    "original": 7532,
+    "preview": 1506,
+    "closed": true,
+    "source_size": 136815,
+    "source_mtime_ns": 1788731141530558900,
+    "relative_volume_change": 0.0021497728999304577,
+    "max_bounds_change": 0.0
+  },
+  {
+    "name": "Right-Inf-Lat-Vent.obj",
+    "original": 2012,
+    "preview": 402,
+    "closed": true,
+    "source_size": 37458,
+    "source_mtime_ns": 1788731095024056500,
+    "relative_volume_change": 0.006502463054187224,
+    "max_bounds_change": 0.0
+  },
+  {
+    "name": "Right-Lateral-Ventricle.obj",
+    "original": 13376,
+    "preview": 2674,
+    "closed": true,
+    "source_size": 242025,
+    "source_mtime_ns": 1788731088936736600,
+    "relative_volume_change": 0.0011609480793511873,
+    "max_bounds_change": 0.0
+  },
+  {
+    "name": "Right-Pallidum.obj",
+    "original": 2580,
+    "preview": 516,
+    "closed": true,
+    "source_size": 47670,
+    "source_mtime_ns": 1788731134217117500,
+    "relative_volume_change": 0.007311246772675695,
+    "max_bounds_change": 0.0
+  },
+  {
+    "name": "Right-Putamen.obj",
+    "original": 6632,
+    "preview": 1326,
+    "closed": true,
+    "source_size": 120603,
+    "source_mtime_ns": 1788731127982248500,
+    "relative_volume_change": 0.0025635317856399498,
+    "max_bounds_change": 0.0
+  },
+  {
+    "name": "Right-Thalamus.obj",
+    "original": 6564,
+    "preview": 1312,
+    "closed": true,
+    "source_size": 119382,
+    "source_mtime_ns": 1788731115811012100,
+    "relative_volume_change": 0.001102572484444675,
+    "max_bounds_change": 0.0
+  },
+  {
+    "name": "Right-VentralDC.obj",
+    "original": 6048,
+    "preview": 1208,
+    "closed": true,
+    "source_size": 110073,
+    "source_mtime_ns": 1788731159882966000,
+    "relative_volume_change": 0.008339560603796148,
+    "max_bounds_change": 0.0
+  },
+  {
+    "name": "WM-hypointensities.obj",
+    "original": 676,
+    "preview": 676,
+    "closed": true,
+    "source_size": 13386,
+    "source_mtime_ns": 1788731165893940900,
+    "relative_volume_change": 0.0,
+    "max_bounds_change": 0.0
+  }
+]
