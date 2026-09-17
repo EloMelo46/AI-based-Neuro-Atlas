@@ -160,8 +160,8 @@ export async function initAssistant(viewer) {
         const results = [];
         for (const action of data.actions) {
           try {
-            viewer.execute(action);
-            results.push({ call_id: action.call_id, ok: true });
+            const state = viewer.execute(action);
+            results.push({ call_id: action.call_id, ok: true, state });
             message(viewer.describe(action), 'action');
           } catch (error) {
             results.push({ call_id: action.call_id, ok: false, error: error.message });

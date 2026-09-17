@@ -34,12 +34,19 @@ $env:OPENAI_API_KEY = "YOUR_API_KEY"
 .venv/Scripts/python.exe -m main.brain_viewer
 ```
 
-The turn-by-turn, non-Realtime assistant can select, show/hide, visually emphasize,
-set axis cuts, and reset the view. A "markiere nur"/"zeige nur" request keeps the
-target regions at 100% opacity and every other loaded region visible at 1%; the
-camera remains fitted to the complete brain. It sends region IDs and the current
-view state, not mesh geometry, to the Responses API. Actual browser execution
-results are sent back before the model confirms a viewer action.
+The turn-by-turn, non-Realtime assistant can show/hide, visually emphasize,
+set axis cuts, and reset the view. Requests such as "zeige mir" or "markiere"
+use `isolate_regions`: targets have 100% opacity and every other loaded brain
+region remains visible at 1%, with original colors and the complete brain in
+frame. CSF stays hidden unless explicitly requested as a target. A new focus
+replaces the old one and clears old cuts; explicitly requested cuts are applied
+afterwards. The old `highlight_regions` name is no longer offered to the model;
+nonempty legacy calls apply the same visible focus.
+
+The API receives region IDs and the current view state, not mesh geometry.
+Each browser action returns its own state snapshot. Focus success is checked
+against target/context opacity, visibility, selection and cuts before the model
+receives a successful tool result, so an unchanged view cannot confirm a new focus.
 
 Text arrives incrementally over an NDJSON stream. Pressing **Escape** aborts the
 browser request and asks the server to close its active OpenAI stream. Already
@@ -90,12 +97,17 @@ API references: [function calling](https://developers.openai.com/api/docs/guides
 
 ## Optimized meshes
 
-The 43 `.obj` files in `export_preview` are optimized FreeSurfer triangle surfaces
-(about 817,000 triangles total). The full-resolution source data is intentionally
-not versioned. `manifest.json` records how the preview files were generated.
+The viewer exposes 38 anatomical structures from the FreeSurfer triangle surfaces
+in `export_preview`; 37 are visible by default because CSF is opt-in.
+`main/mesh_catalog.py` excludes `lh.pial`, `rh.pial`, `lh.white`, `rh.white`, and
+the duplicate `lh_hippo_mc` from the legend, mesh downloads and AI tools/context.
+Their source files remain on disk. The anatomical `Cerebral-White-Matter` and
+`Hippocampus` regions remain available. The full-resolution source data is
+intentionally not versioned. `manifest.json` records how previews were generated;
+displayed triangle counts include only the available structures.
 
-**Mesh-Details** switches between the optimized geometry (816,604 triangles,
-20.2%) and the full local geometry (4,045,140 triangles); switching reloads the
+**Mesh-Details** switches between the optimized geometry (576,008 triangles,
+20.3%) and the full local geometry (2,842,152 triangles); switching reloads the
 viewer. **Bildauflösung** independently changes framebuffer pixels. Rendering
 pauses after interactions and camera damping finish. **Schnittflächen schließen** uses
 stencil passes only at planes intersecting visible regions; disable it for faster
@@ -116,6 +128,11 @@ Playwright:
 ```powershell
 .venv/Scripts/python.exe -m tests.verify_viewer
 ```
+
+`tests.verify_assistant_focus` reproduces the cortex-to-thalamus conversation
+through the real browser and Flask API with mocked model calls. It checks the
+visible change, 1% context, repeated focus, hidden regions, old cuts, CSF opt-in
+and the state returned to the model. It makes no billable API calls.
 
 `tests.verify_assistant` is an optional live integration check. It requires a
 configured API key and incurs usage. Screenshots are saved in the ignored

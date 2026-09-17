@@ -30,7 +30,9 @@ try:
           };
         """)
         page.goto('http://127.0.0.1:5051')
-        page.wait_for_function("document.querySelector('#status').textContent === '43 von 43 Regionen geladen'", timeout=120000)
+        page.wait_for_function("document.querySelector('#status').textContent === '38 von 38 Regionen geladen'", timeout=120000)
+        for name in ('lh.pial', 'rh.pial', 'lh.white', 'rh.white', 'lh_hippo_mc'):
+            assert page.locator(f'.region-row[title="{name}.obj"]').count() == 0
         csf = page.locator('.region-row[title="CSF.obj"] input')
         assert not csf.is_checked(), 'CSF must be opt-in at startup'
         page.locator('#show-regions').click()
@@ -58,7 +60,7 @@ try:
         page.screenshot(path=str(output / 'cuts-open.png'))
         page.locator('#fill-cuts').check()
         page.locator('#hide-regions').click()
-        assert page.locator('#region-count').inner_text().startswith('0 von 43')
+        assert page.locator('#region-count').inner_text().startswith('0 von 38')
         page.wait_for_timeout(500)
         page.screenshot(path=str(output / 'hidden.png'))
         page.locator('#show-regions').click()
@@ -84,12 +86,12 @@ try:
           return performance.now() - window.lastDrawTime > 600;
         }""", polling=200, timeout=20000)
         page.locator('#mesh-detail').select_option('full')
-        page.wait_for_function("document.querySelector('#status').textContent === '43 von 43 Regionen geladen'", timeout=180000)
+        page.wait_for_function("document.querySelector('#status').textContent === '38 von 38 Regionen geladen'", timeout=180000)
         assert page.url.endswith('?detail=full')
         assert page.locator('#mesh-detail').input_value() == 'full'
         assert not page.locator('.region-row[title="CSF.obj"] input').is_checked()
         assert not errors, errors
-        print('PASS: optimized/full mesh details, CSF opt-in, 43 regions, idle rendering, cuts, visibility, resolution, no console errors.')
+        print('PASS: optimized/full mesh details, CSF opt-in, 38 structures, idle rendering, cuts, visibility, resolution, no console errors.')
         browser.close()
 finally:
     server.shutdown()

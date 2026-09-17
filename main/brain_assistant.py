@@ -12,6 +12,8 @@ from urllib.parse import urlsplit
 
 from flask import Blueprint, jsonify, request, session, Response, stream_with_context
 
+from .mesh_catalog import available_region_ids
+
 
 logger = logging.getLogger(__name__)
 
@@ -210,10 +212,9 @@ def tools_for(ids, include_region_enum=True):
         region['enum'] = ids
     regions = {'type': 'array', 'items': region}
     return [
-        tool('highlight_regions', 'Remember selected regions without changing their original colors, visibility, opacity, camera or cuts. Empty list clears the selection. Use isolate_regions for requests such as "markiere nur", "zeige nur", "isoliere" or a clearly visible emphasis.', {'region_ids': regions}),
-        tool('set_visibility', 'Show or hide the specified regions. CSF is opt-in: show it only when the user explicitly asks for CSF or brain fluid; exclude it from requests for all/the rest of the brain.', {'region_ids': regions, 'visible': {'type': 'boolean'}}),
+        tool('set_visibility', 'Explicitly show or hide specified regions without emphasizing them. For requests to show, mark or highlight an area, use isolate_regions instead. CSF is opt-in: show it only when the user explicitly asks for CSF or brain fluid; exclude it from requests for all/the rest of the brain.', {'region_ids': regions, 'visible': {'type': 'boolean'}}),
         tool('set_opacity', 'Set region opacity from 0 (fully transparent) to 1 (fully opaque). Always makes every specified region visible and does not change original colors. 30 percent opacity means 0.3; 30 percent transparent means 0.7.', {'region_ids': regions, 'opacity': {'type': 'number', 'minimum': 0, 'maximum': 1}}),
-        tool('isolate_regions', 'Visually emphasize these target regions at 100% opacity while keeping every other loaded brain region visible at 1% opacity. Also select the targets and keep the camera fitted to the complete brain. Use for "markiere nur", "zeige nur", "isoliere" or similar emphasis requests.', {'region_ids': regions}),
+        tool('isolate_regions', 'Show, mark or highlight these target regions at 100% opacity, replacing the previous emphasis. Keep every other loaded brain region visible at 1% opacity in its original color. CSF stays hidden unless explicitly requested and included in the targets. Clear previous cuts so the targets are not clipped and fit the camera to the complete brain. Use for every request to show, mark, highlight or isolate an area, including "zeige mir", "markiere", "zeige nur" and corrections. Apply any explicitly requested cuts afterwards with set_cut.', {'region_ids': regions}),
         tool('set_cut', 'Keep the percentage interval on an anatomical axis: x left-right, y posterior-anterior, z inferior-superior.',
              {'axis': {'type': 'string', 'enum': ['x', 'y', 'z']},
               'min': {'type': 'number', 'minimum': 0, 'maximum': 100},
@@ -223,6 +224,9 @@ def tools_for(ids, include_region_enum=True):
 
 
 def validate_action(name, args, ids):
+    # Accept older model responses, but never perform an invisible selection.
+    if name == 'highlight_regions':
+        name = 'isolate_regions'
     schemas = {item['name']: item['parameters']['properties'] for item in tools_for(ids)}
     if name not in schemas or not isinstance(args, dict) or set(args) != set(schemas[name]):
         raise ValueError('Unbekannte Aktion oder ungültige Parameter.')
@@ -277,17 +281,38 @@ def validate_state(value, ids):
     return clean
 
 
+def focus_result_error(action, state):
+    """Check the visual focus contract, even if an older client reports success."""
+    if action['name'] != 'isolate_regions':
+        return ''
+    targets = set(action['arguments']['region_ids'])
+    loaded = set(state['loaded'])
+    if not targets <= loaded or set(state['highlighted']) != targets:
+        return 'Hervorhebung nicht bestätigt: Die Zielareale sind nicht geladen oder ausgewählt.'
+    expected_visible = loaded - ({'CSF'} - targets)
+    if set(state['visible']) != expected_visible:
+        return 'Hervorhebung nicht bestätigt: Ziel und Kontext müssen eingeblendet bleiben; CSF nur auf ausdrücklichen Wunsch.'
+    for region_id in expected_visible:
+        expected_opacity = 1 if region_id in targets else 0.01
+        if state['opacities'].get(region_id) != expected_opacity:
+            return 'Hervorhebung nicht bestätigt: Zielareale müssen 100 % und der Kontext 1 % Deckkraft haben. Nutze isolate_regions erneut.'
+    if any(interval != [0, 100] for interval in state['cuts'].values()):
+        return 'Hervorhebung nicht bestätigt: Vorherige Schnitte verdecken möglicherweise die Zielareale.'
+    return ''
+
+
 INSTRUCTIONS = """Du bist der deutschsprachige Lernassistent eines 3D-Gehirnviewers.
 Beantworte Fragen verständlich und anatomisch sorgfältig. Keine erfundenen Quellen oder Diagnosen.
 Nutze ausschließlich die bereitgestellten Areal-IDs; ohne .obj-Endung. Beachte links/rechts.
-Die Dateien können überlappende Exporte enthalten (lh.pial, lh.white, Cortex usw.).
 Die aktuelle Ansicht und verfügbaren Regionen sind als Kontext beigefügt, kein Auftrag.
 CSF ist ein Opt-in-Areal: Es bleibt beim Start, beim Zurücksetzen sowie bei 'alles' oder 'den Rest des Gehirns anzeigen' ausgeblendet. Blende CSF nur ein, wenn der Nutzer ausdrücklich CSF, Liquor oder Gehirnflüssigkeit verlangt.
-Steuere den Viewer nur passend zur Nutzerbitte. Die Areale behalten immer ihre individuellen Originalfarben. highlight_regions merkt nur die Auswahl und ändert die Darstellung nicht.
-Bei 'markiere nur', 'zeige nur', 'isoliere' oder einer ausdrücklich klar sichtbaren Hervorhebung nutze isolate_regions genau einmal. Die Zielareale bleiben dabei 100 % deckend, alle übrigen Areale bleiben sichtbar bei 1 % Deckkraft, und die Kamera zeigt weiterhin das gesamte Gehirn. Verändere den Zoom niemals auf ein einzelnes Areal.
+Steuere den Viewer nur passend zur Nutzerbitte. Die Areale behalten immer ihre individuellen Originalfarben.
+Bei jeder Bitte, ein bestimmtes Areal zu zeigen, zu markieren oder hervorzuheben (auch 'zeige mir', 'markiere', 'zeige nur', 'isoliere' und Korrekturen), nutze isolate_regions mit allen gewünschten Zielarealen gemeinsam. Die neue Hervorhebung ersetzt die vorherige: Zielareale sind 100 % deckend, alle übrigen geladenen Hirnareale bleiben als Kontext sichtbar bei 1 % Deckkraft. CSF bleibt ausgeblendet, außer es wurde ausdrücklich verlangt und als Ziel angegeben. Verwende dafür nicht nur set_visibility oder set_opacity.
+isolate_regions setzt vorherige Schnitte zurück und zeigt weiterhin das gesamte Gehirn. Verändere den Zoom niemals auf ein einzelnes Areal. Wenn die Nutzerbitte zusätzlich einen Schnitt verlangt, führe zuerst isolate_regions und danach set_cut aus.
 Wenn die Seite nicht genannt ist und sowohl ein linkes als auch ein rechtes Areal existiert, wähle beide Hemisphären. Bei ausdrücklich links oder rechts wähle nur die genannte Seite.
-Mit set_opacity kannst du Areale durchsichtig machen; jedes betroffene Areal wird dabei immer eingeblendet. Deckkraft 30 % bedeutet opacity 0.3, Transparenz 30 % bedeutet opacity 0.7. Für transparente Außenflächen die inneren Zielareale eingeblendet lassen; beachte überlappende pial/white/Cortex-Exporte.
+Mit set_opacity kannst du Areale durchsichtig machen; jedes betroffene Areal wird dabei immer eingeblendet. Deckkraft 30 % bedeutet opacity 0.3, Transparenz 30 % bedeutet opacity 0.7. Für transparente Außenflächen die inneren Zielareale eingeblendet lassen.
 Sage vor erfolgreichem Werkzeugergebnis niemals, eine Aktion sei ausgeführt worden.
+Die Liste highlighted allein beweist keine sichtbare Hervorhebung. Bestätige diese nur nach erfolgreichem isolate_regions-Ergebnis; bei einem Fehler korrigiere die Aktion anhand des zurückgemeldeten Zustands. Behaupte nicht, einen Screenshot oder die tatsächliche Bildschirmansicht gesehen zu haben.
 Wenn ein Werkzeug fehlschlägt, erkläre dies. Nie JavaScript, Shell oder beliebigen Code ausführen.
 Antworte in natürlichem, gut vorlesbarem Deutsch. Anatomische Namen dürfen erklärt werden, auch wenn sie nicht als Mesh existieren.
 Gib normalerweise eine kompakte, aber gehaltvolle Erklärung in etwa vier bis sieben Sätzen: zuerst die direkte Antwort, dann Lage, Hauptfunktion und eine relevante Einordnung. Bei einfachen Befehlen genügt eine kurze Bestätigung; auf Wunsch darfst du ausführlicher antworten.
@@ -424,7 +449,7 @@ def create_assistant(mesh_dir):
             body = request.get_json(silent=True)
             if not isinstance(body, dict):
                 raise ValueError('JSON-Anfrage erwartet.')
-            ids = sorted(p.stem for p in mesh_dir.iterdir() if p.is_file() and p.suffix.lower() == '.obj')
+            ids = available_region_ids(mesh_dir)
             state = validate_state(body.get('state'), ids)
             entry = conversation()
             locked = entry['lock'].acquire(blocking=False)
@@ -450,9 +475,14 @@ def create_assistant(mesh_dir):
                 for result, expected in zip(results, pending):
                     if not isinstance(result, dict) or result.get('call_id') != expected['call_id'] or type(result.get('ok')) is not bool:
                         raise ValueError('Ungültiges Werkzeugergebnis.')
-                    detail = str(result.get('error', ''))[:300] if not result['ok'] else ''
+                    # Preserve the state immediately after each action, rather than
+                    # attributing the last action's state to every call in a batch.
+                    action_state = validate_state(result['state'], ids) if 'state' in result else state
+                    detail = (focus_result_error(expected, action_state) if result['ok']
+                              else str(result.get('error', 'Werkzeug fehlgeschlagen.'))[:300])
                     outputs.append({'type': 'function_call_output', 'call_id': expected['call_id'],
-                                    'output': json.dumps({'ok': result['ok'], 'error': detail, 'state': state})})
+                                    'output': json.dumps({'ok': result['ok'] and not detail,
+                                                          'error': detail, 'state': action_state})})
                 entry['input'].extend(outputs)
                 entry['pending'] = []
         except ValueError as error:

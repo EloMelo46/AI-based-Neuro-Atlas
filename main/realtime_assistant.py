@@ -6,6 +6,8 @@ import urllib.request
 import urllib.error
 from flask import request, jsonify
 
+from .mesh_catalog import available_region_ids
+
 
 def _openai_error_detail(error):
     """Return a bounded OpenAI error description without exposing credentials."""
@@ -69,7 +71,7 @@ def register_realtime(bp, mesh_dir):
         body = request.get_json(silent=True)
         if not isinstance(body, dict):
             raise ValueError('JSON-Anfrage erwartet.')
-        ids = sorted(p.stem for p in mesh_dir.glob('*.obj'))
+        ids = available_region_ids(mesh_dir)
         return body, ids, validate_state(body.get('state'), ids)
 
     @bp.post('/api/assistant/realtime/session')

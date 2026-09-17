@@ -10,8 +10,10 @@ if __package__ in (None, ''):
     import sys
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from main.brain_assistant import create_assistant
+    from main.mesh_catalog import available_mesh_names
 else:
     from .brain_assistant import create_assistant
+    from .mesh_catalog import available_mesh_names
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 MESH_DIR = PROJECT_ROOT / "export_preview"
@@ -162,13 +164,14 @@ HTML = r"""
 
 @app.route("/")
 def index():
-    meshes = sorted(p.name for p in MESH_DIR.iterdir() if p.is_file() and p.suffix.lower() == ".obj")
+    meshes = available_mesh_names(MESH_DIR)
     full_mesh_available = all((FULL_MESH_DIR / name).is_file() for name in meshes)
     mesh_detail = request.args.get('detail', 'optimized')
     if mesh_detail not in ('optimized', 'full') or (mesh_detail == 'full' and not full_mesh_available):
         mesh_detail = 'optimized'
     try:
         manifest = json.loads((MESH_DIR / 'manifest.json').read_text(encoding='utf-8'))
+        manifest = [item for item in manifest if item['name'] in meshes]
         preview_count = sum(int(item['preview']) for item in manifest)
         full_count = sum(int(item['original']) for item in manifest)
     except (OSError, ValueError, KeyError, TypeError):
@@ -181,6 +184,8 @@ def index():
 
 @app.route("/mesh/<path:filename>")
 def mesh(filename):
+    if filename not in available_mesh_names(MESH_DIR):
+        abort(404)
     detail = request.args.get('detail', 'optimized')
     if detail not in ('optimized', 'full'):
         abort(400)

@@ -375,7 +375,9 @@ export const assistantViewer = {
       if (!region?.object) throw new Error(`Areal nicht geladen: ${id}`);
       return region;
     });
-    if (action.name === 'highlight_regions') {
+    const focusing = action.name === 'isolate_regions' || (action.name === 'highlight_regions' && selected.length > 0);
+    if (action.name === 'highlight_regions' && !selected.length) {
+      // Compatibility for clearing a selection; not offered as an AI tool.
       selectRegions(selected);
     } else if (action.name === 'set_opacity') {
       if (!selected.length || !Number.isFinite(args.opacity) || args.opacity < 0 || args.opacity > 1) throw new Error('Deckkraft muss zwischen 0 und 1 liegen; mindestens ein Areal wählen.');
@@ -389,7 +391,7 @@ export const assistantViewer = {
           region.checkbox.checked = region.object.visible;
         }
       }
-    } else if (action.name === 'isolate_regions') {
+    } else if (focusing) {
       if (!selected.length) throw new Error('Keine Zielregion.');
       selectRegions(selected);
       for (const region of regions) {
@@ -402,6 +404,8 @@ export const assistantViewer = {
           setRegionOpacity(region, selected.includes(region) ? 1 : 0.01);
         }
       }
+      // Old cuts must not keep the newly requested anatomy out of view.
+      document.getElementById('reset-cuts').click();
       // Keep the full brain in frame instead of zooming onto the selected anatomy.
       fitCamera();
     } else if (action.name === 'set_cut') {
@@ -415,15 +419,34 @@ export const assistantViewer = {
         if (region.object) setRegionOpacity(region, 1, false);
       }
       setAllRegions(true);
-      this.execute({ name: 'highlight_regions', arguments: { region_ids: [] } });
+      selectRegions([]);
       document.getElementById('reset-cuts').click();
       fitCamera();
     }
     updateRegionCount();
     requestRender();
+    const state = this.getState();
+    if (focusing) {
+      // Check the actual scene/material settings before reporting success.
+      for (const region of regions) {
+        if (!region.object) continue;
+        const target = selected.includes(region);
+        const visible = !region.optIn || target;
+        const opacity = target || !visible ? 1 : 0.01;
+        let valid = region.object.visible === visible && region.highlighted === target;
+        region.object.traverse(child => {
+          if (child.isMesh && child.material.opacity !== opacity) valid = false;
+        });
+        if (!valid) throw new Error('Die sichtbare Hervorhebung konnte nicht bestätigt werden.');
+      }
+      if (Object.values(state.cuts).some(([min, max]) => min !== 0 || max !== 100)) {
+        throw new Error('Vorherige Schnitte konnten nicht zurückgesetzt werden.');
+      }
+    }
+    return state;
   },
   describe(action) {
-    const labels = { highlight_regions: 'Markierung aktualisiert', set_visibility: 'Sichtbarkeit geändert',
+    const labels = { highlight_regions: action.arguments.region_ids?.length ? 'Zielareale hervorgehoben (Umgebung 1 %)' : 'Auswahl aufgehoben', set_visibility: 'Sichtbarkeit geändert',
       set_opacity: `Deckkraft: ${Math.round(action.arguments.opacity * 100)} %`,
       isolate_regions: 'Zielareale hervorgehoben (Umgebung 1 %)', set_cut: 'Schnitt eingestellt', reset_view: 'Ansicht zurückgesetzt' };
     return labels[action.name] + (action.arguments.region_ids?.length ? ': ' + action.arguments.region_ids.join(', ') : '');

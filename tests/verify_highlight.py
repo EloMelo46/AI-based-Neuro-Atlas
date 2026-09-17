@@ -25,12 +25,15 @@ try:
         page.evaluate("async () => { window.viewer = (await import('/static/brain_viewer.js')).assistantViewer; }")
         assert 'CSF' not in page.evaluate('viewer.getState().visible')
         page.evaluate("viewer.execute({name:'highlight_regions', arguments:{region_ids:['Left-Cerebral-Cortex']}})")
-        assert len(page.evaluate('viewer.getState().visible')) == 42
+        assert len(page.evaluate('viewer.getState().visible')) == 37
         assert page.locator('.is-highlighted').count() == 0
+        legacy_state = page.evaluate('viewer.getState()')
+        assert legacy_state['opacities']['Left-Cerebral-Cortex'] == 1
+        assert legacy_state['opacities']['Left-Thalamus'] == 0.01
         # Visual isolation keeps the whole brain visible as a 1% context shell.
         page.evaluate("viewer.execute({name:'isolate_regions', arguments:{region_ids:['Left-Cerebral-Cortex']}})")
         focus_state = page.evaluate('viewer.getState()')
-        assert len(focus_state['visible']) == 42 and 'CSF' not in focus_state['visible']
+        assert len(focus_state['visible']) == 37 and 'CSF' not in focus_state['visible']
         assert focus_state['highlighted'] == ['Left-Cerebral-Cortex']
         assert focus_state['opacities']['Left-Cerebral-Cortex'] == 1
         assert all(value == 0.01 for key, value in focus_state['opacities'].items()
@@ -57,19 +60,19 @@ try:
         page.wait_for_timeout(500)
         page.screenshot(path=str(OUTPUT_DIR / 'highlight.png'))
         page.evaluate("viewer.execute({name:'highlight_regions', arguments:{region_ids:['Left-Hippocampus']}})")
-        assert len(page.evaluate('viewer.getState().visible')) == 42
+        assert len(page.evaluate('viewer.getState().visible')) == 37
         page.evaluate("viewer.execute({name:'highlight_regions', arguments:{region_ids:[]}})")
-        assert len(page.evaluate('viewer.getState().visible')) == 42
+        assert len(page.evaluate('viewer.getState().visible')) == 37
         page.evaluate("viewer.execute({name:'highlight_regions', arguments:{region_ids:['Left-Hippocampus']}})")
         page.locator('#show-regions').click()
         page.evaluate("viewer.execute({name:'highlight_regions', arguments:{region_ids:[]}})")
-        assert len(page.evaluate('viewer.getState().visible')) == 42
+        assert len(page.evaluate('viewer.getState().visible')) == 37
         page.evaluate("viewer.execute({name:'set_visibility', arguments:{region_ids:['CSF'], visible:true}})")
         assert 'CSF' in page.evaluate('viewer.getState().visible')
         page.locator('#show-regions').click()
         assert 'CSF' not in page.evaluate('viewer.getState().visible')
         page.evaluate("viewer.execute({name:'highlight_regions', arguments:{region_ids:['Left-Hippocampus']}}); viewer.execute({name:'reset_view', arguments:{}})")
-        assert len(page.evaluate('viewer.getState().visible')) == 42
+        assert len(page.evaluate('viewer.getState().visible')) == 37
         assert 'CSF' not in page.evaluate('viewer.getState().visible')
         assert page.evaluate('viewer.getState().highlighted') == []
         assert all(value == 1 for value in page.evaluate('viewer.getState().opacities').values())

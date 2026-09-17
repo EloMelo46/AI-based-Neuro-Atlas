@@ -26,17 +26,17 @@ try:
         page.wait_for_function("document.querySelector('#assistant-status').textContent === 'Bereit.' || document.querySelector('#assistant-status').textContent === 'Anfrage fehlgeschlagen.'", timeout=180000)
         assert page.locator('#assistant-status').inner_text() == 'Bereit.', page.locator('#assistant-messages').inner_text()
         state = page.evaluate("async () => (await import('/static/brain_viewer.js')).assistantViewer.getState()")
-        assert len(state['visible']) == 43, state
+        assert len(state['visible']) == 37 and 'CSF' not in state['visible'], state
         assert state['highlighted'] == ['Left-Hippocampus'], state
         assert state['opacities']['Left-Hippocampus'] == 1, state
         assert all(value == 0.01 for key, value in state['opacities'].items()
-                   if key != 'Left-Hippocampus'), state
+                   if key not in ('Left-Hippocampus', 'CSF')), state
         assert state['cuts']['x'] == [0, 50], state
         page.locator('#assistant-input').fill('Setze nun die gesamte Ansicht zurück.')
         page.locator('#assistant-send').click()
         page.wait_for_function("!document.querySelector('#assistant-send').disabled", timeout=180000)
         state = page.evaluate("async () => (await import('/static/brain_viewer.js')).assistantViewer.getState()")
-        assert len(state['visible']) == 43 and state['highlighted'] == [] and state['cuts']['x'] == [0,100], state
+        assert len(state['visible']) == 37 and 'CSF' not in state['visible'] and state['highlighted'] == [] and state['cuts']['x'] == [0,100], state
         output = PROJECT_ROOT / 'verification'
         output.mkdir(exist_ok=True)
         page.screenshot(path=str(output / 'assistant.png'))
