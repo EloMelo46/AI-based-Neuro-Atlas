@@ -1,0 +1,17 @@
+{
+	admin off
+	persist_config off
+	auto_https disable_redirects
+	skip_install_trust
+	storage file_system {
+		root "{$NEURO_TLS_STORAGE}"
+	}
+}
+
+{$NEURO_HTTPS_SITES} {
+	tls internal
+	reverse_proxy 127.0.0.1:{$NEURO_BACKEND_PORT} {
+		# Flush promptly while retaining upstream cancellation on disconnect.
+		flush_interval 1ms
+	}
+}

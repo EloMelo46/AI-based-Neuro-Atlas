@@ -135,9 +135,10 @@ HTML = r"""
     </div>
     <div class="assistant-actions">
       <button id="assistant-send" disabled>Senden</button>
-      <button id="assistant-mic" type="button" disabled aria-pressed="false">Mikrofon starten</button>
+      <button id="assistant-mic" type="button" disabled aria-pressed="false" aria-describedby="assistant-mic-hint">Mikrofon starten</button>
       <button id="assistant-new" type="button">Neues Gespräch</button>
     </div>
+    <p id="assistant-mic-hint" class="hint" role="status" hidden></p>
   </form>
   <p id="assistant-speech-status" class="hint" role="status" hidden>Sprachausgabe wird vorbereitet …</p>
   <audio id="assistant-audio" controls hidden aria-label="Gesprochene Antwort"></audio>

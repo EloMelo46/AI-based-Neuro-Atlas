@@ -62,12 +62,18 @@ sceneHost.appendChild(renderer.domElement);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 const rotationToggle = document.getElementById('auto-rotate');
+let resumeRotationAfterCuts = false;
 let interacting = false;
 let lastFrameTime = null;
 const rotationOffset = new THREE.Vector3();
 controls.addEventListener('start', () => { interacting = true; });
 controls.addEventListener('end', () => { interacting = false; lastFrameTime = null; requestRender(); });
-rotationToggle.addEventListener('change', () => { lastFrameTime = null; requestRender(); });
+rotationToggle.addEventListener('change', () => {
+  // A manual choice supersedes a rotation pause made for a cut view.
+  resumeRotationAfterCuts = false;
+  lastFrameTime = null;
+  requestRender();
+});
 document.addEventListener('visibilitychange', () => {
   lastFrameTime = null;
   if (!document.hidden) requestRender();
@@ -174,6 +180,12 @@ const cutInputs = cutAxes.map(axis => ({
 
 function updateCuts() {
   if (cutBounds.isEmpty()) return;
+  const hasCuts = cutInputs.some(inputs => Number(inputs.min.value) > 0 || Number(inputs.max.value) < 100);
+  if (!hasCuts && resumeRotationAfterCuts) {
+    rotationToggle.checked = true;
+    resumeRotationAfterCuts = false;
+    lastFrameTime = null;
+  }
   requestRender();
   brain.updateMatrixWorld(true);
   cutAxes.forEach((axis, index) => {
@@ -273,6 +285,7 @@ function faceCut(axis, preferredBound = null) {
   });
   faceBounds.min[axis] = faceBounds.max[axis] = faceBounds[bound][axis];
   faceBounds.applyMatrix4(brain.matrixWorld);
+  resumeRotationAfterCuts ||= rotationToggle.checked;
   rotationToggle.checked = false;
   lastFrameTime = null;
   fitCamera(faceBounds, normal, 1.02);
@@ -449,7 +462,7 @@ export const assistantViewer = {
       }
       // Old cuts must not keep the newly requested anatomy out of view.
       document.getElementById('reset-cuts').click();
-      // Preserve the current camera, zoom, pan and automatic rotation.
+      // Preserve the camera, zoom and pan; clearing cuts resumes their paused rotation.
     } else if (action.name === 'set_cut') {
       const index = cutAxes.indexOf(args.axis);
       if (index < 0 || !Number.isFinite(args.min) || !Number.isFinite(args.max) || args.min < 0 || args.max > 100 || args.min > args.max) throw new Error('Ungültige Schnittgrenzen.');

@@ -6,6 +6,16 @@ export function initMicrophone({ button, status, setBusy, onText, onError, onSta
   let timer = null;
   let discarded = false;
   const supported = window.isSecureContext && navigator.mediaDevices?.getUserMedia && window.MediaRecorder;
+  const hint = document.getElementById('assistant-mic-hint');
+  const unavailableReason = !window.isSecureContext
+    ? 'Mikrofon gesperrt: Öffne Neuro Atlas über HTTPS mit einem vertrauenswürdigen Zertifikat oder lokal über localhost. Der Textchat bleibt verfügbar.'
+    : !supported
+      ? 'Dieser Browser unterstützt keine Mikrofonaufnahme. Verwende einen aktuellen Browser. Der Textchat bleibt verfügbar.'
+      : '';
+  if (hint) {
+    hint.textContent = unavailableReason;
+    hint.hidden = !unavailableReason;
+  }
   function refresh() {
     button.disabled = !supported || (phase === 'idle' ? !available : phase !== 'recording');
     button.textContent = phase === 'recording' ? 'Stoppen & senden' : 'Mikrofon starten';
@@ -17,7 +27,7 @@ export function initMicrophone({ button, status, setBusy, onText, onError, onSta
     stream?.getTracks().forEach(track => track.stop());
     stream = null;
   }
-  if (!supported) button.title = 'Mikrofon benötigt einen unterstützten Browser auf localhost oder HTTPS.';
+  if (!supported) button.title = unavailableReason;
   button.addEventListener('click', async () => {
     if (phase === 'recording') {
       phase = 'uploading';

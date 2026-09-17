@@ -1,10 +1,33 @@
+# Local environments, downloaded tools and generated HTTPS state.
 .venv/
+.tools/
+.local/
 __pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+*.log
+
+# Local credentials and certificates, including copies outside .local/.
 .env
 .env.*
 !.env.example
+*.key
+*.pem
+*.crt
+*.cer
+*.p12
+*.pfx
+
+# Generated verification output and full-resolution source geometry.
 verification/
 /export_all_areas/
+
+# Existing local-only mesh preparation and sample-dependent speech check.
 /tests/verify_speech.py
 /main/prepare_meshes.py
 /requirements-preview.txt

@@ -44,6 +44,10 @@ def main():
               window.cameraState = () => ({position:view.camera.position.toArray(),
                 target:view.controls.target.toArray(), quaternion:view.camera.quaternion.toArray(),
                 zoom:view.camera.zoom, rotating:document.getElementById('auto-rotate').checked});
+              window.cameraPose = () => {
+                const {rotating, ...pose} = cameraState();
+                return JSON.stringify(pose);
+              };
             }""")
             assert len(page.evaluate('viewer.getState().loaded')) == 38
             assert page.locator('#info').is_visible() and page.locator('#assistant-panel').is_visible()
@@ -119,11 +123,12 @@ def main():
                     page.evaluate('({axis,bound}) => checkCut(axis,bound)', {'axis': axis, 'bound': bound})
                     if bound == 'max':
                         page.screenshot(path=str(output / f'camera-cut-{axis}.png'))
-                    # Removing cuts as part of a highlight must keep the view.
+                    # Highlighting clears cuts, preserves the pose and resumes rotation.
                     assert page.evaluate("""() => {
-                      const before = JSON.stringify(cameraState());
+                      const before = cameraPose();
                       viewer.execute({name:'isolate_regions',arguments:{region_ids:['Right-Thalamus']}});
-                      return before === JSON.stringify(cameraState()) && viewer.getState().cuts.x[0] === 0;
+                      return before === cameraPose() && cameraState().rotating &&
+                        Object.values(viewer.getState().cuts).every(([min,max]) => min === 0 && max === 100);
                     }""")
             print('PASS: X/Y/Z cuts face both exposed sides, fit the full section and stay steady.', flush=True)
 
@@ -144,9 +149,48 @@ def main():
               const before = JSON.stringify(cameraState());
               viewer.execute({name:'set_cut',arguments:{axis:'y',min:0,max:100}});
               if (JSON.stringify(cameraState()) !== before) throw new Error('Removing a cut moved camera');
+              const poseBeforeReset = cameraPose();
               document.getElementById('reset-cuts').click();
-              if (JSON.stringify(cameraState()) !== before) throw new Error('Resetting cuts moved camera');
+              if (cameraPose() !== poseBeforeReset) throw new Error('Resetting cuts moved camera');
+              if (!cameraState().rotating) throw new Error('Resetting the last cut did not resume rotation');
             }""")
+            # Pauses survive repeated edits and multiple axes, for both slider
+            # and assistant changes. Explicitly disabled rotation remains off.
+            for rotating in (False, True):
+                for removal in ('slider', 'assistant', 'reset'):
+                    page.locator('#auto-rotate').set_checked(rotating)
+                    page.evaluate("""({rotating, removal}) => {
+                      const edit = (id,value) => {
+                        const input = document.getElementById(id);
+                        input.value = value;
+                        input.dispatchEvent(new Event('input',{bubbles:true}));
+                      };
+                      edit('x-max',80);
+                      edit('x-max',70);
+                      viewer.execute({name:'set_cut',arguments:{axis:'y',min:10,max:100}});
+                      if (cameraState().rotating) throw new Error('Cut did not pause rotation');
+                      edit('x-max',100);
+                      if (cameraState().rotating) throw new Error('Rotation resumed with another cut active');
+                      const pose = cameraPose();
+                      if (removal === 'slider') edit('y-min',0);
+                      else if (removal === 'assistant') viewer.execute({name:'set_cut',arguments:{axis:'y',min:0,max:100}});
+                      else document.getElementById('reset-cuts').click();
+                      if (cameraPose() !== pose) throw new Error('Removing cuts reset the camera');
+                      if (cameraState().rotating !== rotating) throw new Error('Prior rotation choice was not restored');
+                    }""", {'rotating': rotating, 'removal': removal})
+            before_rotation = page.evaluate('view.camera.position.toArray()')
+            page.wait_for_timeout(300)
+            assert page.evaluate('view.camera.position.toArray()') != before_rotation, 'Resumed rotation did not render'
+            # Turning rotation on and then off while inspecting a cut is an
+            # explicit user choice; clearing that cut must not override it.
+            page.evaluate("viewer.execute({name:'set_cut',arguments:{axis:'z',min:0,max:70}})")
+            page.locator('#auto-rotate').check()
+            page.locator('#auto-rotate').uncheck()
+            page.locator('#reset-cuts').click()
+            assert not page.locator('#auto-rotate').is_checked()
+            page.locator('#reset-cuts').click()
+            assert not page.locator('#auto-rotate').is_checked()
+            print('PASS: last cut removal resumes actual rotation; repeated edits, multi-axis cuts and manual overrides preserve user intent.', flush=True)
             # An axis change must also consume any residual mouse-drag damping.
             canvas = page.locator('#scene canvas').bounding_box()
             x, y = canvas['x'] + canvas['width'] / 2, canvas['y'] + canvas['height'] / 2

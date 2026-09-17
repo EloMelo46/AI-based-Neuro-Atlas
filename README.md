@@ -1,4 +1,4 @@
-# Gehirn Viewer
+# Neuro Atlas
 
 ## Setup
 
@@ -23,6 +23,21 @@ python3 -m venv .venv
 Then open http://localhost:5000. The 3D viewer requires WebGL and an internet
 connection to load Three.js from jsDelivr.
 
+For microphone access from a phone or Raspberry Pi over the LAN, use the
+optional HTTPS server with Caddy and Waitress:
+
+```powershell
+.venv/Scripts/python.exe -m pip install -r requirements-https.txt
+.venv/Scripts/python.exe -m main.https_server --host 192.168.1.213
+```
+
+Replace the example IP with the server's LAN address and install Caddy first.
+Open `https://<server-ip>:8443`. Each client must trust the generated public root
+certificate. See [HTTPS setup and device instructions](docs/https.md).
+The launcher starts and stops both services, keeps the Python backend on loopback,
+and stores private TLS state outside Git in `.local/https`. It does not change
+system trust stores. The original HTTP development command remains available.
+
 **Vollbild** hides both side panels and the mobile navigation, keeping the
 conversation, microphone, playback and view state alive. Use the small **×**
 button or Escape to return to the previous layout.
@@ -44,11 +59,14 @@ use `isolate_regions`: targets have 100% opacity and every other loaded brain
 region remains visible at 3%, with original colors. CSF stays hidden unless
 explicitly requested as a target. A new focus
 replaces the old one and clears old cuts while preserving camera perspective,
-zoom, pan and automatic rotation. Explicitly requested cuts are applied afterwards.
+zoom, pan and the user's rotation choice. Explicitly requested cuts are applied afterwards.
 Setting a cut (by assistant or slider) faces its exposed surface along the
 anatomical X, Y or Z axis and fits the complete cut face into view. Automatic
 rotation pauses to keep that view steady; it can be re-enabled with **Langsam
-drehen**. Removing a cut leaves the camera in place. **Ansicht zurücksetzen**
+drehen**. Removing the last cut resumes rotation if it was paused for the cut;
+a manually disabled rotation stays off. This also applies to slider changes,
+assistant commands, **Schnitte zurücksetzen**, and highlighting a new region.
+Removing cuts leaves the camera in place. **Ansicht zurücksetzen**
 still restores the default camera view.
 The old `highlight_regions` name is no longer offered to the model;
 nonempty legacy calls apply the same visible focus.
@@ -134,6 +152,8 @@ limit. The recording is sent once to `gpt-4o-mini-transcribe` with `language="de
 and `response_format="json"`; it is processed in memory and not written to disk.
 Chrome/Edge microphone access requires `http://localhost:5000` or HTTPS. A plain
 HTTP LAN address normally cannot access the microphone.
+The disabled microphone button now includes a visible explanation for insecure
+connections or browsers without recording support.
 
 The three model IDs can be overridden with `OPENAI_MODEL`,
 `OPENAI_TRANSCRIBE_MODEL`, and `OPENAI_TTS_MODEL`. Response quality can be tuned
@@ -171,6 +191,13 @@ Run mocked unit tests without API calls:
 .venv/Scripts/python.exe -m unittest tests.test_assistant -v
 ```
 
+After installing the HTTPS dependencies and Caddy, run
+`python -m unittest tests.test_https` and `python -m tests.verify_https`.
+These verify the real TLS chain, proxy Origin checks, secure session cookies,
+microphone upload, incremental text/audio delivery and the HTTP microphone hint.
+The browser check uses simulated audio and mocked OpenAI; no billable requests
+or system certificate installations are made.
+
 `verify_viewer`, `verify_highlight`, `verify_mobile`, `verify_non_realtime`, and
 `verify_microphone` are non-billable browser checks requiring Chrome and Python
 Playwright:
@@ -192,7 +219,8 @@ with mocked OpenAI and locally generated silent audio.
 for the name resolver, including inflections, sides and unavailable structures.
 
 `tests.verify_camera` checks perspective preservation during focus, continued
-rotation, both faces of X/Y/Z cuts, manual sliders, and complete cut-face framing
+rotation, resuming rotation after the last cut, manual rotation overrides,
+both faces of X/Y/Z cuts, manual sliders, and complete cut-face framing
 in wide and narrow viewports, without live API calls.
 
 `tests.verify_assistant` is an optional live integration check. It requires a
