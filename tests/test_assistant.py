@@ -76,7 +76,7 @@ class AssistantTests(unittest.TestCase):
         self.assertNotIn('focus_regions', [item['name'] for item in definitions])
         self.assertNotIn('highlight_regions', [item['name'] for item in definitions])
         isolate = next(item for item in definitions if item['name'] == 'isolate_regions')
-        self.assertIn('1% opacity', isolate['description'])
+        self.assertIn('3% opacity', isolate['description'])
 
     def test_realtime_routes_are_disabled(self):
         self.assertEqual(self.client.post('/api/assistant/realtime/session',
@@ -92,8 +92,29 @@ class AssistantTests(unittest.TestCase):
             self.assertEqual(response.mimetype, 'audio/mpeg')
             self.assertEqual(response.headers['Cache-Control'], 'no-store')
             speech.assert_called_once_with('Hallo.', 'cedar')
-        for text, voice in [('', 'marin'), ('x' * 2001, 'marin'), ('Hallo', 'fake')]:
+        for text, voice in [('', 'marin'), ('x' * 4097, 'marin'), (' ' * 4096 + 'x', 'marin'), ('Hallo', 'fake')]:
             with self.assertRaises(ValueError): generate_speech(text, voice)
+
+        with patch('main.brain_assistant._api_key', return_value='test-only'), \
+                patch('main.brain_assistant.urllib.request.urlopen', return_value=io.BytesIO(b'ID3-test')) as upstream:
+            text = 'Der Thalamus. ' * 200
+            self.assertEqual(generate_speech(text, 'marin'), b'ID3-test')
+            self.assertEqual(json.loads(upstream.call_args.args[0].data)['input'], text)
+
+    def test_speech_streams_mentions_without_transcription(self):
+        audio = b'mp3-test' * 2000
+        recording = io.BytesIO(audio)
+        with patch('main.brain_assistant._api_key', return_value='test-only'), \
+                patch('main.brain_assistant.urllib.request.urlopen', return_value=recording) as upstream:
+            response = self.client.post('/api/assistant/speech', headers=self.headers,
+                json={'text': 'Der Thalamus und der Hippocampus.', 'voice': 'marin'}, buffered=False)
+            self.assertEqual(response.mimetype, 'audio/mpeg')
+            self.assertTrue(response.is_streamed)
+            self.assertEqual(recording.tell(), 4096, 'Playback must not wait for the whole download')
+            self.assertEqual(response.get_data(), audio)
+            self.assertTrue(recording.closed)
+            self.assertEqual(upstream.call_count, 1, 'Narration must not request transcription')
+            self.assertEqual(upstream.call_args.args[0].full_url, 'https://api.openai.com/v1/audio/speech')
 
     def test_audio_model_request_defaults(self):
         with patch.dict(os.environ, {'OPENAI_API_KEY': 'test-only'}, clear=True), \
@@ -103,7 +124,7 @@ class AssistantTests(unittest.TestCase):
             payload = json.loads(urlopen.call_args.args[0].data)
             self.assertEqual(payload, {
                 'model': 'gpt-4o-mini-tts', 'voice': 'marin', 'input': 'Hallo.',
-            'response_format': 'mp3', 'stream_format': 'audio', 'speed': 1.2,
+                'response_format': 'mp3', 'stream_format': 'audio', 'speed': 1.1,
                 'instructions': ('Sprich natürliches, klares Hochdeutsch mit warmer, ruhiger und kompetenter Stimme. '
                     'Nutze ein entspanntes Erklärtempo, dezente lebendige Betonung und kurze sinnvolle Pausen '
                     'zwischen Gedankengängen. Sprich anatomische sowie lateinische Fachbegriffe besonders '
@@ -267,7 +288,7 @@ class AssistantTests(unittest.TestCase):
         state['visible'] = [region_id for region_id in state['loaded']
                             if region_id != 'CSF' or region_id in targets]
         state['highlighted'] = targets[:]
-        state['opacities'] = {region_id: 1 if region_id in targets or region_id == 'CSF' else 0.01
+        state['opacities'] = {region_id: 1 if region_id in targets or region_id == 'CSF' else 0.03
                               for region_id in state['loaded']}
         return state
 
@@ -284,7 +305,7 @@ class AssistantTests(unittest.TestCase):
                 if failure == 'selection':
                     broken['highlighted'] = ['Left-Cerebral-Cortex']
                 elif failure == 'target_opacity':
-                    broken['opacities']['Left-Thalamus'] = 0.01
+                    broken['opacities']['Left-Thalamus'] = 0.03
                 elif failure == 'context_opacity':
                     broken['opacities']['Left-Cerebral-Cortex'] = 1
                 elif failure == 'hidden_target':
@@ -327,7 +348,7 @@ class AssistantTests(unittest.TestCase):
             receipt = json.loads(output['output'])
             self.assertFalse(receipt['ok'])
             self.assertIn('Deckkraft', receipt['error'])
-            self.assertEqual(receipt['state']['opacities']['Left-Thalamus'], 0.01)
+            self.assertEqual(receipt['state']['opacities']['Left-Thalamus'], 0.03)
 
     def test_each_action_keeps_its_own_state_before_a_requested_cut(self):
         responses = [

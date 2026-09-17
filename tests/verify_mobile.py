@@ -39,6 +39,17 @@ try:
             assert page.locator('#scene').bounding_box()['height'] > 200
             page.screenshot(path=str(OUTPUT_DIR / f'mobile-{panel}.png'))
         page.locator('#assistant-input').fill('Was macht der Hippocampus?')
+        page.locator('#fullscreen-toggle').click()
+        page.wait_for_function('!!document.fullscreenElement')
+        assert not page.locator('#info').is_visible()
+        assert not page.locator('#assistant-panel').is_visible()
+        assert not page.locator('.mobile-nav').is_visible()
+        assert page.locator('#fullscreen-toggle').inner_text() == '×'
+        assert page.locator('#scene').bounding_box()['height'] == page.viewport_size['height']
+        page.locator('#fullscreen-toggle').click()
+        page.wait_for_function('!document.fullscreenElement')
+        assert page.locator('#assistant-panel').is_visible()
+        assert page.locator('#assistant-input').input_value() == 'Was macht der Hippocampus?'
         page.locator('[data-panel="regions"]').click()
         page.locator('#hide-regions').click()
         assert '0 von' in page.locator('#region-count').inner_text()
@@ -50,12 +61,12 @@ try:
           viewer.execute({name: 'isolate_regions', arguments: {region_ids: targets}});
           const focused = viewer.getState();
           const focusCorrect = focused.visible.length === loaded.length - 1 && !focused.visible.includes('CSF') &&
-            background.every(id => focused.opacities[id] === 0.01) &&
+            background.every(id => focused.opacities[id] === 0.03) &&
             targets.every(id => focused.opacities[id] === 1);
-          viewer.execute({name: 'set_opacity', arguments: {region_ids: background, opacity: 0.05}});
+          viewer.execute({name: 'set_opacity', arguments: {region_ids: background, opacity: 0.2}});
           const state = viewer.getState();
           return focusCorrect && state.visible.length === loaded.length - 1 && !state.visible.includes('CSF') &&
-            background.every(id => state.opacities[id] === 0.05) &&
+            background.every(id => state.opacities[id] === 0.2) &&
             targets.every(id => state.opacities[id] === 1);
         }"""), 'Setting opacity did not reactivate hidden background regions'
         page.evaluate("""async () => {
@@ -73,6 +84,6 @@ try:
         page.screenshot(path=str(OUTPUT_DIR / 'desktop-design.png'))
         assert not errors, errors
         browser.close()
-        print('PASS: mobile navigation, 1% focus context, opacity reactivates hidden regions, portrait/landscape, no horizontal overflow, no JS errors.')
+        print('PASS: mobile navigation, 3% focus context, opacity reactivates hidden regions, portrait/landscape, no horizontal overflow, no JS errors.')
 finally:
     server.shutdown()

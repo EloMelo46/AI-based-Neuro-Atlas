@@ -23,6 +23,8 @@ const bridge = {
   describe(action) {
     return activeViewer ? activeViewer.describe(action) : '3D-Aktion noch nicht verfügbar.';
   },
+  glowRegions(ids) { activeViewer?.glowRegions(ids); },
+  clearMentionGlow() { activeViewer?.clearMentionGlow(); },
 };
 
 export function attachViewer(viewer) {

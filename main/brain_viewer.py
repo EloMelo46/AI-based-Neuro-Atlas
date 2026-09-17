@@ -29,8 +29,8 @@ HTML = r"""
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Gehirn Viewer</title>
-  <link rel="icon" href="data:,">
+  <title>Neuro Atlas</title>
+  <link rel="icon" type="image/svg+xml" sizes="any" href="{{ url_for('static', filename='favicon.svg') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='assistant.css') }}">
   <style>
     body { margin: 0; overflow: hidden; background: #10141c; color: #fff; font-family: sans-serif; }
@@ -63,7 +63,7 @@ HTML = r"""
   </script>
 </head>
 <body>
-<header class="app-header"><div><span class="brand-icon" aria-hidden="true">◉</span> NEURO<span class="brand-light">ATLAS</span></div><div class="header-actions"><span class="app-caption">Das Gehirn entdecken</span><button id="fullscreen-toggle" type="button" aria-pressed="false">Vollbild</button></div></header>
+<header class="app-header"><div><span class="brand-icon" aria-hidden="true">◉</span> NEURO<span class="brand-light">ATLAS</span></div><div class="header-actions"><button id="fullscreen-toggle" type="button" aria-pressed="false" aria-label="Vollbild starten" title="Vollbild starten">Vollbild</button></div></header>
 <p id="fullscreen-status" role="status" hidden></p>
 <div id="scene" aria-label="Interaktives 3D-Gehirn"></div>
 <div id="info">
@@ -139,6 +139,7 @@ HTML = r"""
       <button id="assistant-new" type="button">Neues Gespräch</button>
     </div>
   </form>
+  <p id="assistant-speech-status" class="hint" role="status" hidden>Sprachausgabe wird vorbereitet …</p>
   <audio id="assistant-audio" controls hidden aria-label="Gesprochene Antwort"></audio>
 </details>
 <nav class="mobile-nav" aria-label="Ansicht wählen">

@@ -1,5 +1,6 @@
 import { initMicrophone } from './microphone.js';
 import { initSpeech } from './speech.js';
+import { initMentionCues } from './region_mentions.js';
 
 export async function initAssistant(viewer) {
   const status = document.getElementById('assistant-status');
@@ -19,7 +20,12 @@ export async function initAssistant(viewer) {
   let microphone = null;
   let requestController = null;
   let interrupted = false;
-  const speech = initSpeech({ onError(text) { message(text, 'error'); } });
+  const mentions = initMentionCues(viewer);
+  const speech = initSpeech({
+    onError(text) { message(text, 'error'); },
+    onCue: mentions.glow, onStop: mentions.stop,
+    getRegionIds: () => viewer.getState().loaded,
+  });
 
   function message(text, kind = '') {
     const row = document.createElement('div');
@@ -115,7 +121,10 @@ export async function initAssistant(viewer) {
     void post('/api/assistant/cancel', {}, 10000).catch(() => {});
   }
   document.addEventListener('keydown', event => {
-    if (event.key === 'Escape' && requestController) interruptResponse();
+    if (event.key === 'Escape' && !document.fullscreenElement && !document.body.classList.contains('viewer-fullscreen')) {
+      if (requestController) interruptResponse();
+      else speech.stop();
+    }
   });
   microphone = initMicrophone({ button: document.getElementById('assistant-mic'), status, setBusy, onStart: speech.stop,
     onText(text) {
@@ -173,6 +182,7 @@ export async function initAssistant(viewer) {
       if (data.actions.length) throw new Error('Aktionslimit erreicht. Bitte neues Gespräch starten.');
       data.messages.forEach((part, index) => answer(part, index === 0 ? streamedRow : null));
       if (document.getElementById('assistant-speak').checked) speech.speak(data.messages, document.getElementById('assistant-voice').value);
+      else mentions.showText(data.messages);
       status.textContent = 'Bereit.';
     } catch (error) {
       streamedRow?.classList.remove('streaming');
@@ -190,7 +200,7 @@ export async function initAssistant(viewer) {
       clearTimeout(timeout);
       requestController = null;
       setBusy(false);
-      input.focus();
+      if (!document.fullscreenElement) input.focus();
     }
   });
   try {

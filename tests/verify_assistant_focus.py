@@ -20,7 +20,7 @@ def assert_focus(state, targets):
     assert set(state['highlighted']) == set(targets), state
     assert set(state['visible']) == set(state['loaded']) - ({'CSF'} - set(targets)), state
     for region_id in state['visible']:
-        assert state['opacities'][region_id] == (1 if region_id in targets else 0.01), state
+        assert state['opacities'][region_id] == (1 if region_id in targets else 0.03), state
     assert all(interval == [0, 100] for interval in state['cuts'].values()), state
 
 
@@ -70,7 +70,7 @@ def main():
                                if item.get('type') == 'function_call_output')
                 assert receipt['ok'], receipt
                 assert receipt['state'] == state, receipt
-                assert page.locator('.assistant-message.action').last.inner_text().startswith('Zielareale hervorgehoben (Umgebung 1 %)')
+                assert page.locator('.assistant-message.action').last.inner_text().startswith('Zielareale hervorgehoben (Umgebung 3 %)')
                 assert page.locator('.assistant-message.error').count() == 0
                 print('PASS:', question, flush=True)
                 return state
@@ -121,7 +121,7 @@ def main():
             (output / 'focus-thalamus.png').write_bytes(thalamus_image)
             (output / 'anatomical-cortex-opacity.png').write_bytes(transparent_image)
             browser.close()
-            print('PASS: visible focus, 1% context, CSF opt-in, old cuts, per-action acknowledgements, reset.')
+            print('PASS: visible focus, 3% context, CSF opt-in, old cuts, per-action acknowledgements, reset.')
     finally:
         server.shutdown()
 

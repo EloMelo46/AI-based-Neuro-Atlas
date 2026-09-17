@@ -29,14 +29,14 @@ try:
         assert page.locator('.is-highlighted').count() == 0
         legacy_state = page.evaluate('viewer.getState()')
         assert legacy_state['opacities']['Left-Cerebral-Cortex'] == 1
-        assert legacy_state['opacities']['Left-Thalamus'] == 0.01
-        # Visual isolation keeps the whole brain visible as a 1% context shell.
+        assert legacy_state['opacities']['Left-Thalamus'] == 0.03
+        # Visual isolation keeps the whole brain visible as a 3% context shell.
         page.evaluate("viewer.execute({name:'isolate_regions', arguments:{region_ids:['Left-Cerebral-Cortex']}})")
         focus_state = page.evaluate('viewer.getState()')
         assert len(focus_state['visible']) == 37 and 'CSF' not in focus_state['visible']
         assert focus_state['highlighted'] == ['Left-Cerebral-Cortex']
         assert focus_state['opacities']['Left-Cerebral-Cortex'] == 1
-        assert all(value == 0.01 for key, value in focus_state['opacities'].items()
+        assert all(value == 0.03 for key, value in focus_state['opacities'].items()
                    if key not in ('Left-Cerebral-Cortex', 'CSF'))
         before = page.locator('#scene canvas').screenshot()
         page.wait_for_timeout(700)
@@ -78,6 +78,6 @@ try:
         assert all(value == 1 for value in page.evaluate('viewer.getState().opacities').values())
         assert not errors, errors
         browser.close()
-        print('PASS: 100%/1% visual focus, whole-brain visibility, highlight/clear, opacity, reset.')
+        print('PASS: 100%/3% visual focus, whole-brain visibility, highlight/clear, opacity, reset.')
 finally:
     server.shutdown()

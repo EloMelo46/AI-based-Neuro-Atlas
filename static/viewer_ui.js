@@ -15,8 +15,11 @@ const fullscreenButton = document.getElementById('fullscreen-toggle');
 const fullscreenStatus = document.getElementById('fullscreen-status');
 function updateFullscreen() {
   const active = !!document.fullscreenElement;
-  fullscreenButton.textContent = active ? 'Vollbild beenden' : 'Vollbild';
+  document.body.classList.toggle('viewer-fullscreen', active);
+  fullscreenButton.textContent = active ? '×' : 'Vollbild';
   fullscreenButton.setAttribute('aria-pressed', String(active));
+  fullscreenButton.setAttribute('aria-label', active ? 'Vollbild beenden' : 'Vollbild starten');
+  fullscreenButton.title = active ? 'Vollbild beenden (Esc)' : 'Vollbild starten';
 }
 fullscreenButton.addEventListener('click', async () => {
   fullscreenStatus.hidden = true;
@@ -35,8 +38,9 @@ fullscreenButton.addEventListener('click', async () => {
   updateFullscreen();
 });
 document.addEventListener('fullscreenchange', updateFullscreen);
+updateFullscreen();
 document.addEventListener('keydown', event => {
-  if (event.key === 'Escape' && matchMedia('(max-width: 900px)').matches) {
+  if (event.key === 'Escape' && !document.fullscreenElement && !document.body.classList.contains('viewer-fullscreen') && matchMedia('(max-width: 900px)').matches) {
     selectPanel('scene');
     navigation.querySelector('button').focus();
   }

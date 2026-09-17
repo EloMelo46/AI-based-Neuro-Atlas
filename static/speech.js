@@ -1,151 +1,198 @@
-// One cancellable, low-latency playback queue. MP3 bytes are played as they arrive.
-export function initSpeech({ onError = () => {} } = {}) {
-  const audio = document.getElementById('assistant-audio');
-  let generation = 0;
-  let controller = null;
-  let reader = null;
-  let mediaSource = null;
-  let blobURL = null;
-  let releasePlayback = null;
+import { narrationSegments } from './region_mentions.js';
+import { DEFAULT_GLOW_OFFSET_SECONDS, estimatedRegionMentions, followSpeechMentions } from './speech_timing.js';
 
-  function stop() {
+// Continuous speech with independent visual cues. Prefetch only for long answers.
+export function initSpeech({ onError = () => {}, onCue = () => {}, onStop = () => {}, getRegionIds = () => [],
+  glowOffsetSeconds = DEFAULT_GLOW_OFFSET_SECONDS } = {}) {
+  const audio = document.getElementById('assistant-audio');
+  const status = document.getElementById('assistant-speech-status');
+  let generation = 0;
+  let blobURL = null;
+  const requests = new Set();
+  const readers = new Set();
+
+  function release() {
     generation++;
-    controller?.abort();
-    controller = null;
-    void reader?.cancel().catch(() => {});
-    reader = null;
+    for (const entry of requests) {
+      clearTimeout(entry.timeout);
+      entry.controller.abort();
+    }
+    requests.clear();
+    for (const reader of readers) void reader.cancel().catch(() => {});
+    readers.clear();
     audio.pause();
     audio.removeAttribute('src');
     audio.load();
-    releasePlayback?.();
-    releasePlayback = null;
-    mediaSource = null;
     if (blobURL) URL.revokeObjectURL(blobURL);
     blobURL = null;
     audio.hidden = true;
+    if (status) status.hidden = true;
   }
+  function stop() { release(); onStop(); }
 
-  function playbackFinished(current) {
+  function waitFor(target, event, signal, start = () => {}) {
     return new Promise((resolve, reject) => {
       const clear = () => {
-        audio.onended = null;
-        audio.onerror = null;
-        releasePlayback = null;
+        target.removeEventListener(event, done);
+        target.removeEventListener('error', failed);
+        signal.removeEventListener('abort', aborted);
       };
-      releasePlayback = () => { clear(); resolve(); };
-      audio.onended = () => { clear(); resolve(); };
-      audio.onerror = () => {
-        clear();
-        reject(new Error('Audio konnte nicht abgespielt werden.'));
+      const done = () => { clear(); resolve(); };
+      const failed = () => { clear(); reject(new Error('Audiostream konnte nicht verarbeitet werden.')); };
+      const aborted = () => { clear(); reject(new DOMException('Abgebrochen', 'AbortError')); };
+      if (signal.aborted) { aborted(); return; }
+      target.addEventListener(event, done, { once: true });
+      target.addEventListener('error', failed, { once: true });
+      signal.addEventListener('abort', aborted, { once: true });
+      try { start(); } catch (error) { clear(); reject(error); }
+    });
+  }
+
+  function playbackFinished(entry, current) {
+    const signal = entry.controller.signal;
+    return new Promise((resolve, reject) => {
+      const updateTiming = () => {
+        if (entry.complete && Number.isFinite(audio.duration) && audio.duration > 0) {
+          entry.timeline = estimatedRegionMentions(entry.segment, audio.duration, glowOffsetSeconds);
+        }
       };
+      audio.addEventListener('loadedmetadata', updateTiming);
+      audio.addEventListener('durationchange', updateTiming);
+      entry.updateTiming = updateTiming;
+      updateTiming();
+      const detachCues = followSpeechMentions(audio, () => entry.timeline, {
+        onCue: ids => { if (current === generation) onCue(ids); },
+      });
+      const clear = () => {
+        audio.removeEventListener('loadedmetadata', updateTiming);
+        audio.removeEventListener('durationchange', updateTiming);
+        entry.updateTiming = null;
+        audio.removeEventListener('ended', done);
+        audio.removeEventListener('error', failed);
+        detachCues();
+        signal.removeEventListener('abort', aborted);
+      };
+      const done = () => { clear(); resolve(); };
+      const failed = () => { clear(); reject(new Error('Audio konnte nicht abgespielt werden.')); };
+      const aborted = () => { clear(); reject(new DOMException('Abgebrochen', 'AbortError')); };
+      if (signal.aborted) { aborted(); return; }
+      audio.addEventListener('ended', done);
+      audio.addEventListener('error', failed);
+      signal.addEventListener('abort', aborted, { once: true });
       audio.play().catch(error => {
-        if (current !== generation) resolve();
-        else if (error.name === 'NotAllowedError') return;
-        else { clear(); reject(error); }
+        if (current !== generation) return;
+        // Keep listening for a real Play gesture; no premature glow on blocked autoplay.
+        if (error.name !== 'NotAllowedError') { clear(); reject(error); }
       });
     });
   }
 
-  async function append(source, bytes, current) {
-    if (current !== generation) throw new DOMException('Abgebrochen', 'AbortError');
-    await new Promise((resolve, reject) => {
-      const clear = () => {
-        source.removeEventListener('updateend', done);
-        source.removeEventListener('error', failed);
-      };
-      const done = () => { clear(); resolve(); };
-      const failed = () => { clear(); reject(new Error('Audiostream konnte nicht verarbeitet werden.')); };
-      source.addEventListener('updateend', done, { once: true });
-      source.addEventListener('error', failed, { once: true });
-      source.appendBuffer(bytes);
-    });
-  }
-
-  async function playResponse(response, current) {
+  async function playResponse(response, entry, current) {
+    const signal = entry.controller.signal;
+    if (blobURL) URL.revokeObjectURL(blobURL);
     const canStream = response.body && window.MediaSource && MediaSource.isTypeSupported('audio/mpeg');
     if (!canStream) {
       const blob = await response.blob();
+      clearTimeout(entry.timeout);
       if (current !== generation) return;
+      entry.complete = true;
       blobURL = URL.createObjectURL(blob);
       audio.src = blobURL;
       audio.hidden = false;
-      await playbackFinished(current);
+      await playbackFinished(entry, current);
       return;
     }
-
-    mediaSource = new MediaSource();
+    const mediaSource = new MediaSource();
     blobURL = URL.createObjectURL(mediaSource);
-    audio.src = blobURL;
-    audio.hidden = false;
-    await new Promise((resolve, reject) => {
-      mediaSource.addEventListener('sourceopen', resolve, { once: true });
-      mediaSource.addEventListener('error', () => reject(new Error('Audiostream konnte nicht geöffnet werden.')), { once: true });
+    await waitFor(mediaSource, 'sourceopen', signal, () => {
+      audio.src = blobURL;
+      audio.hidden = false;
     });
-    if (current !== generation) return;
     const source = mediaSource.addSourceBuffer('audio/mpeg');
-    reader = response.body.getReader();
+    const reader = response.body.getReader();
+    readers.add(reader);
     let playback = null;
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      if (value?.byteLength) {
-        await append(source, value, current);
-        if (!playback) {
-          playback = playbackFinished(current);
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (signal.aborted || current !== generation) throw new DOMException('Abgebrochen', 'AbortError');
+        if (done) break;
+        if (value?.byteLength) {
+          await waitFor(source, 'updateend', signal, () => source.appendBuffer(value));
+          if (!playback) {
+            playback = playbackFinished(entry, current);
+            // Handle a playback error even if the download is still in progress.
+            void playback.catch(() => { void reader.cancel().catch(() => {}); });
+          }
         }
       }
-    }
-    reader = null;
-    if (!playback) throw new Error('OpenAI hat keine Audiodaten geliefert.');
-    if (mediaSource.readyState === 'open' && !source.updating) mediaSource.endOfStream();
-    await playback;
+      clearTimeout(entry.timeout);
+      if (!playback) throw new Error('OpenAI hat keine Audiodaten geliefert.');
+      if (mediaSource.readyState === 'open' && !source.updating) mediaSource.endOfStream();
+      entry.complete = true;
+      entry.updateTiming?.();
+      await playback;
+    } finally { readers.delete(reader); }
+  }
+
+  function prepare(segment, voice, buffer) {
+    const entry = { controller: new AbortController(), timeout: null, ready: null, segment, complete: false,
+      timeline: estimatedRegionMentions(segment, undefined, glowOffsetSeconds), updateTiming: null };
+    requests.add(entry);
+    entry.timeout = setTimeout(() => entry.controller.abort(), 75000);
+    entry.ready = (async () => {
+      try {
+        let response = await fetch('/api/assistant/speech', { method: 'POST', headers: {
+          'Content-Type': 'application/json', 'X-Brain-Viewer': '1',
+        }, body: JSON.stringify({ text: segment.text, voice }), signal: entry.controller.signal });
+        if (!response.ok) {
+          const data = await response.json();
+          throw new Error(data.error || 'Sprachausgabe fehlgeschlagen.');
+        }
+        if (buffer) {
+          response = new Response(await response.blob());
+          clearTimeout(entry.timeout);
+        }
+        return { response };
+      } catch (error) {
+        clearTimeout(entry.timeout);
+        // A prefetched rejection must not become an unhandled promise rejection.
+        return { error };
+      }
+    })();
+    return entry;
   }
 
   async function speak(parts, voice) {
     stop();
     const current = generation;
-    // Strip source annotations before speaking, retaining the links in the chat.
-    let text = parts.map(part => {
-      const chars = Array.from(part.text);
-      for (const cite of [...part.citations].sort((a, b) => b.start_index - a.start_index)) {
-        if (Number.isInteger(cite.start_index) && Number.isInteger(cite.end_index) && cite.start_index >= 0 && cite.end_index <= chars.length) chars.splice(cite.start_index, cite.end_index - cite.start_index);
-      }
-      return chars.join('');
-    }).join('\n').trim();
-    const chunks = [];
-    while (text.length) {
-      let end = Math.min(1800, text.length);
-      if (end < text.length) {
-        const boundary = text.lastIndexOf(' ', end);
-        if (boundary > 0) end = boundary;
-      }
-      chunks.push(text.slice(0, end));
-      text = text.slice(end).trimStart();
-    }
+    const segments = narrationSegments(parts, getRegionIds());
+    if (!segments.length) return;
+    let pending = prepare(segments[0], voice, false);
     try {
-      for (const chunk of chunks) {
+      for (let index = 0; index < segments.length; index++) {
+        const entry = pending;
+        if (status) status.hidden = false;
+        const { response, error } = await entry.ready;
         if (current !== generation) return;
-        controller = new AbortController();
-        const timeout = setTimeout(() => controller?.abort(), 75000);
-        let response;
-        try {
-          response = await fetch('/api/assistant/speech', { method: 'POST', headers: {
-            'Content-Type': 'application/json', 'X-Brain-Viewer': '1',
-          }, body: JSON.stringify({ text: chunk, voice }), signal: controller.signal });
-          if (!response.ok) {
-            const data = await response.json();
-            throw new Error(data.error || 'Sprachausgabe fehlgeschlagen.');
-          }
-          await playResponse(response, current);
-        } finally { clearTimeout(timeout); }
+        if (status) status.hidden = true;
+        if (error) throw error;
+        pending = index + 1 < segments.length ? prepare(segments[index + 1], voice, true) : null;
+        try { await playResponse(response, entry, current); }
+        finally {
+          clearTimeout(entry.timeout);
+          entry.controller.abort();
+          requests.delete(entry);
+        }
+        if (current !== generation) return;
       }
-      if (current === generation) stop();
+      // Let the final mention finish its glow after natural audio completion.
+      if (current === generation) release();
     } catch (error) {
       if (current !== generation) return;
       stop();
       onError(error.name === 'AbortError'
-        ? 'Zeitlimit bei der Sprachausgabe. Die Textantwort bleibt verfügbar.'
-        : error.message);
+        ? 'Zeitlimit bei der Sprachausgabe. Die Textantwort bleibt verfügbar.' : error.message);
     }
   }
 

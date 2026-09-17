@@ -29,7 +29,7 @@ try:
         assert len(state['visible']) == 37 and 'CSF' not in state['visible'], state
         assert state['highlighted'] == ['Left-Hippocampus'], state
         assert state['opacities']['Left-Hippocampus'] == 1, state
-        assert all(value == 0.01 for key, value in state['opacities'].items()
+        assert all(value == 0.03 for key, value in state['opacities'].items()
                    if key not in ('Left-Hippocampus', 'CSF')), state
         assert state['cuts']['x'] == [0, 50], state
         page.locator('#assistant-input').fill('Setze nun die gesamte Ansicht zurück.')
@@ -41,7 +41,7 @@ try:
         output.mkdir(exist_ok=True)
         page.screenshot(path=str(output / 'assistant.png'))
         assert not errors, errors
-        print('PASS: live OpenAI chat, 100%/1% focus, whole-brain view, cut, reset, no JS errors.')
+        print('PASS: live OpenAI chat, 100%/3% focus, whole-brain view, cut, reset, no JS errors.')
         browser.close()
 finally:
     server.shutdown()

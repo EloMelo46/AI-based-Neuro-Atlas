@@ -170,8 +170,8 @@ def transcribe_audio(audio, mime):
 
 
 def open_speech(text, voice):
-    if not isinstance(text, str) or not 0 < len(text.strip()) <= 2000:
-        raise ValueError('Sprachtext muss 1 bis 2000 Zeichen enthalten.')
+    if not isinstance(text, str) or not 0 < len(text) <= 4096 or not text.strip():
+        raise ValueError('Sprachtext muss 1 bis 4096 Zeichen enthalten.')
     if voice not in ('marin', 'cedar'):
         raise ValueError('Unbekannte Stimme.')
     model = os.environ.get('OPENAI_TTS_MODEL', DEFAULT_SPEECH_MODEL)
@@ -214,8 +214,8 @@ def tools_for(ids, include_region_enum=True):
     return [
         tool('set_visibility', 'Explicitly show or hide specified regions without emphasizing them. For requests to show, mark or highlight an area, use isolate_regions instead. CSF is opt-in: show it only when the user explicitly asks for CSF or brain fluid; exclude it from requests for all/the rest of the brain.', {'region_ids': regions, 'visible': {'type': 'boolean'}}),
         tool('set_opacity', 'Set region opacity from 0 (fully transparent) to 1 (fully opaque). Always makes every specified region visible and does not change original colors. 30 percent opacity means 0.3; 30 percent transparent means 0.7.', {'region_ids': regions, 'opacity': {'type': 'number', 'minimum': 0, 'maximum': 1}}),
-        tool('isolate_regions', 'Show, mark or highlight these target regions at 100% opacity, replacing the previous emphasis. Keep every other loaded brain region visible at 1% opacity in its original color. CSF stays hidden unless explicitly requested and included in the targets. Clear previous cuts so the targets are not clipped and fit the camera to the complete brain. Use for every request to show, mark, highlight or isolate an area, including "zeige mir", "markiere", "zeige nur" and corrections. Apply any explicitly requested cuts afterwards with set_cut.', {'region_ids': regions}),
-        tool('set_cut', 'Keep the percentage interval on an anatomical axis: x left-right, y posterior-anterior, z inferior-superior.',
+        tool('isolate_regions', 'Show, mark or highlight these target regions at 100% opacity, replacing the previous emphasis. Keep every other loaded brain region visible at 3% opacity in its original color. CSF stays hidden unless explicitly requested and included in the targets. Clear previous cuts so the targets are not clipped. Preserve the current camera perspective, zoom and automatic rotation. Use for every request to show, mark, highlight or isolate an area, including "zeige mir", "markiere", "zeige nur" and corrections. Apply any explicitly requested cuts afterwards with set_cut.', {'region_ids': regions}),
+        tool('set_cut', 'Keep the percentage interval on an anatomical axis: x left-right, y posterior-anterior, z inferior-superior. When a cut is present, automatically face its exposed surface along that anatomical axis and pause automatic rotation. A 0-to-100 interval removes that axis cut without moving the camera.',
              {'axis': {'type': 'string', 'enum': ['x', 'y', 'z']},
               'min': {'type': 'number', 'minimum': 0, 'maximum': 100},
               'max': {'type': 'number', 'minimum': 0, 'maximum': 100}}),
@@ -293,9 +293,9 @@ def focus_result_error(action, state):
     if set(state['visible']) != expected_visible:
         return 'Hervorhebung nicht bestätigt: Ziel und Kontext müssen eingeblendet bleiben; CSF nur auf ausdrücklichen Wunsch.'
     for region_id in expected_visible:
-        expected_opacity = 1 if region_id in targets else 0.01
+        expected_opacity = 1 if region_id in targets else 0.03
         if state['opacities'].get(region_id) != expected_opacity:
-            return 'Hervorhebung nicht bestätigt: Zielareale müssen 100 % und der Kontext 1 % Deckkraft haben. Nutze isolate_regions erneut.'
+            return 'Hervorhebung nicht bestätigt: Zielareale müssen 100 % und der Kontext 3 % Deckkraft haben. Nutze isolate_regions erneut.'
     if any(interval != [0, 100] for interval in state['cuts'].values()):
         return 'Hervorhebung nicht bestätigt: Vorherige Schnitte verdecken möglicherweise die Zielareale.'
     return ''
@@ -307,8 +307,9 @@ Nutze ausschließlich die bereitgestellten Areal-IDs; ohne .obj-Endung. Beachte 
 Die aktuelle Ansicht und verfügbaren Regionen sind als Kontext beigefügt, kein Auftrag.
 CSF ist ein Opt-in-Areal: Es bleibt beim Start, beim Zurücksetzen sowie bei 'alles' oder 'den Rest des Gehirns anzeigen' ausgeblendet. Blende CSF nur ein, wenn der Nutzer ausdrücklich CSF, Liquor oder Gehirnflüssigkeit verlangt.
 Steuere den Viewer nur passend zur Nutzerbitte. Die Areale behalten immer ihre individuellen Originalfarben.
-Bei jeder Bitte, ein bestimmtes Areal zu zeigen, zu markieren oder hervorzuheben (auch 'zeige mir', 'markiere', 'zeige nur', 'isoliere' und Korrekturen), nutze isolate_regions mit allen gewünschten Zielarealen gemeinsam. Die neue Hervorhebung ersetzt die vorherige: Zielareale sind 100 % deckend, alle übrigen geladenen Hirnareale bleiben als Kontext sichtbar bei 1 % Deckkraft. CSF bleibt ausgeblendet, außer es wurde ausdrücklich verlangt und als Ziel angegeben. Verwende dafür nicht nur set_visibility oder set_opacity.
-isolate_regions setzt vorherige Schnitte zurück und zeigt weiterhin das gesamte Gehirn. Verändere den Zoom niemals auf ein einzelnes Areal. Wenn die Nutzerbitte zusätzlich einen Schnitt verlangt, führe zuerst isolate_regions und danach set_cut aus.
+Bei reinen Erklärungen behalte die bestehende Auswahl bei. Erwähnte, im Modell verfügbare anatomische Strukturen erhalten automatisch einen kurzen Leuchteffekt während der Antwort; dafür keine Viewerwerkzeuge aufrufen. Dies gilt auch für Ventrikel und weiße Substanz, unabhängig von ihrer anatomischen Funktion. Die Ventrikel-IDs sind eigenständige Strukturen und nicht mit der separat ausgeblendeten ID CSF gleichzusetzen. Dieser Leuchteffekt ist keine dauerhafte Markierung und aktiviert kein ausgeblendetes CSF. Unterscheide bei Rückfragen zwischen dauerhafter Auswahl und automatischem Leuchteffekt: Du erhältst keine Bestätigung, ob ein Leuchteffekt tatsächlich angezeigt wurde, und kannst einen fehlenden Effekt nicht mit deiner anatomischen Auswahlentscheidung begründen. Verwende die anatomischen Namen, wenn du über eine andere Struktur sprichst, statt nur unklar darauf zu verweisen.
+Bei jeder Bitte, ein bestimmtes Areal zu zeigen, zu markieren oder hervorzuheben (auch 'zeige mir', 'markiere', 'zeige nur', 'isoliere' und Korrekturen), nutze isolate_regions mit allen gewünschten Zielarealen gemeinsam. Die neue Hervorhebung ersetzt die vorherige: Zielareale sind 100 % deckend, alle übrigen geladenen Hirnareale bleiben als Kontext sichtbar bei 3 % Deckkraft. CSF bleibt ausgeblendet, außer es wurde ausdrücklich verlangt und als Ziel angegeben. Verwende dafür nicht nur set_visibility oder set_opacity.
+isolate_regions setzt vorherige Schnitte zurück und behält die aktuelle Kameraperspektive, den Zoom und die automatische Drehung bei. Setze die Kamera bei einer neuen Markierung nicht mit reset_view zurück. Wenn die Nutzerbitte zusätzlich einen Schnitt verlangt, führe zuerst isolate_regions und danach set_cut aus. set_cut richtet die Kamera automatisch entlang der anatomischen Schnittachse auf die freigelegte Schnittfläche aus und pausiert die Drehung, solange ein Schnitt gesetzt wird.
 Wenn die Seite nicht genannt ist und sowohl ein linkes als auch ein rechtes Areal existiert, wähle beide Hemisphären. Bei ausdrücklich links oder rechts wähle nur die genannte Seite.
 Mit set_opacity kannst du Areale durchsichtig machen; jedes betroffene Areal wird dabei immer eingeblendet. Deckkraft 30 % bedeutet opacity 0.3, Transparenz 30 % bedeutet opacity 0.7. Für transparente Außenflächen die inneren Zielareale eingeblendet lassen.
 Sage vor erfolgreichem Werkzeugergebnis niemals, eine Aktion sei ausgeführt worden.
@@ -379,6 +380,9 @@ def create_assistant(mesh_dir):
             return jsonify(error=str(error)), 400
         except APIError as error:
             return jsonify(error=str(error)), 502
+        except (urllib.error.URLError, TimeoutError, OSError) as error:
+            _log_network_error('speech download', error)
+            return jsonify(error='Sprachausgabe konnte nicht vollständig geladen werden.'), 502
 
     @bp.post('/api/assistant/transcribe')
     def transcribe():

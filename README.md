@@ -23,6 +23,10 @@ python3 -m venv .venv
 Then open http://localhost:5000. The 3D viewer requires WebGL and an internet
 connection to load Three.js from jsDelivr.
 
+**Vollbild** hides both side panels and the mobile navigation, keeping the
+conversation, microphone, playback and view state alive. Use the small **×**
+button or Escape to return to the previous layout.
+
 ## OpenAI assistant
 
 Set `OPENAI_API_KEY` in the server environment before starting. Never put it in
@@ -37,10 +41,16 @@ $env:OPENAI_API_KEY = "YOUR_API_KEY"
 The turn-by-turn, non-Realtime assistant can show/hide, visually emphasize,
 set axis cuts, and reset the view. Requests such as "zeige mir" or "markiere"
 use `isolate_regions`: targets have 100% opacity and every other loaded brain
-region remains visible at 1%, with original colors and the complete brain in
-frame. CSF stays hidden unless explicitly requested as a target. A new focus
-replaces the old one and clears old cuts; explicitly requested cuts are applied
-afterwards. The old `highlight_regions` name is no longer offered to the model;
+region remains visible at 3%, with original colors. CSF stays hidden unless
+explicitly requested as a target. A new focus
+replaces the old one and clears old cuts while preserving camera perspective,
+zoom, pan and automatic rotation. Explicitly requested cuts are applied afterwards.
+Setting a cut (by assistant or slider) faces its exposed surface along the
+anatomical X, Y or Z axis and fits the complete cut face into view. Automatic
+rotation pauses to keep that view steady; it can be re-enabled with **Langsam
+drehen**. Removing a cut leaves the camera in place. **Ansicht zurücksetzen**
+still restores the default camera view.
+The old `highlight_regions` name is no longer offered to the model;
 nonempty legacy calls apply the same visible focus.
 
 The API receives region IDs and the current view state, not mesh geometry.
@@ -72,12 +82,52 @@ explicit source requests, not stable anatomy basics. Search calls may add latenc
 and tool charges.
 
 **Vorlesen** uses `gpt-4o-mini-tts`, `response_format="mp3"`,
-`stream_format="audio"`, `speed=1.0`, detailed German delivery instructions, and the selected
-**Marin** or **Cedar** voice; Marin is the default. Audio bytes are proxied and
-played while they arrive when the browser supports Media Source Extensions.
+`stream_format="audio"`, `speed=1.1`, detailed German delivery instructions, and the selected
+**Marin** or **Cedar** voice; Marin is the default. Audio plays while bytes arrive
+when the browser supports Media Source Extensions, including answers with region
+mentions. Other browsers download the audio before playing it.
 Unchecking **Vorlesen**, changing voice, or sending another message cancels pending
 playback. If autoplay is blocked, press Play in the audio player.
-Restricted API keys need request access to `POST /v1/audio/speech`.
+Restricted API keys need request access to `POST /v1/audio/speech` for playback
+and `POST /v1/audio/transcriptions` for microphone input.
+
+Mentioned regions receive a separate, softly pulsing two-second glow, including
+regions outside the current selection. The overlay is visible through other
+surfaces and respects cuts; selection, opacity, camera and visibility settings
+are never changed. Hidden CSF remains excluded. Reduced-motion settings replace
+pulsing with a steady glow. Names and left/right qualifiers are resolved against
+the loaded meshes by `static/region_mentions.js`. It includes explicit German
+case/plural forms, Latin and English names, umlaut/ASCII spellings, typographic
+hyphens and common left/right qualifiers before or after the name. Additional
+terminology was checked against [NLM MeSH](https://www.ncbi.nlm.nih.gov/mesh/68002421)
+and [FIPAT's ventricular terminology](https://ifaa.unifr.ch/Public/TNAEntryPage/auto/part/LAEN/TAH8276%20P2%20EN.htm).
+Longer specific names take priority, including when their mesh is unavailable;
+they cannot fall back to a different structure via a shorter name. Unknown names,
+unmeshed subregions and pronouns are not assigned speculative anatomy. This is
+a curated name resolver, not a guarantee of understanding arbitrary paraphrases.
+
+Normal answers use one continuous speech request, including all region names.
+Only long answers are split, preferably at sentence boundaries, into at most
+3,800 characters per request (below the [Speech API's 4,096-character limit](https://developers.openai.com/api/reference/resources/audio/subresources/speech/methods/create)).
+One following chunk is prefetched when needed. Glow never restarts the audio,
+changes its playback speed, or adds a speech request.
+
+`static/speech_timing.js` estimates mention positions from the answer's syllables
+and punctuation, then scales them to the actual audio duration once the download
+is complete. The growing stream buffer is never treated as the complete duration.
+There is no Whisper analysis, extra API request, or analysis-related startup wait.
+Cues follow the player's actual position; paused or blocked playback cannot
+advance them, and forward seeks skip stale mentions. Repeated names each get a cue.
+
+`DEFAULT_GLOW_OFFSET_SECONDS` in that file defaults to **0.3**: positive values
+delay only the glow, negative values advance it, and **0** disables the offset.
+This is an initial tuning value, not a measured correction. Timing remains an
+estimate: a constant offset can reduce a consistent lead but cannot correct all
+differences in emphasis or pauses. Playback and the two-second glow duration are
+unchanged by the offset.
+Without **Vorlesen**, mentions glow in text order at one-second intervals.
+A new message, microphone recording, voice change, or Escape outside fullscreen
+cancels pending cues. Natural playback completion lets the last glow expire.
 
 **Mikrofon starten** records locally until **Stoppen & senden** or the 60-second
 limit. The recording is sent once to `gpt-4o-mini-transcribe` with `language="de"`
@@ -131,8 +181,19 @@ Playwright:
 
 `tests.verify_assistant_focus` reproduces the cortex-to-thalamus conversation
 through the real browser and Flask API with mocked model calls. It checks the
-visible change, 1% context, repeated focus, hidden regions, old cuts, CSF opt-in
+visible change, 3% context, repeated focus, hidden regions, old cuts, CSF opt-in
 and the state returned to the model. It makes no billable API calls.
+
+`tests.verify_narration` checks name resolution, two-second glow expiry,
+unchanged persistent state, hidden CSF, multiple cues in a single uninterrupted
+audio source/request, pause/seek timing, cancellation, and fullscreen continuity
+with mocked OpenAI and locally generated silent audio.
+`tests/region_mention_cases.json` holds additional positive and negative examples
+for the name resolver, including inflections, sides and unavailable structures.
+
+`tests.verify_camera` checks perspective preservation during focus, continued
+rotation, both faces of X/Y/Z cuts, manual sliders, and complete cut-face framing
+in wide and narrow viewports, without live API calls.
 
 `tests.verify_assistant` is an optional live integration check. It requires a
 configured API key and incurs usage. Screenshots are saved in the ignored

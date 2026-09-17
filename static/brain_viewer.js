@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { createCutCaps } from './cut_caps.js';
+import { createMentionGlow } from './mention_glow.js';
 import { attachViewer } from './assistant_bridge.js';
 
 // FreeSurfer triangle surfaces: two header lines, big-endian float32
@@ -73,6 +74,7 @@ document.addEventListener('visibilitychange', () => {
 });
 let framePending = false;
 let caps = null;
+let mentionGlow = null;
 function requestRender() {
   if (framePending) return;
   framePending = true;
@@ -89,8 +91,9 @@ function requestRender() {
     }
     controls.update();
     caps?.update(document.getElementById('fill-cuts').checked);
+    const glowing = mentionGlow?.update(time);
     renderer.render(scene, camera);
-    if (rotating) requestRender();
+    if (rotating || glowing) requestRender();
   });
 }
 controls.addEventListener('change', requestRender);
@@ -191,7 +194,7 @@ function updateCuts() {
   });
 }
 
-cutInputs.forEach(inputs => {
+cutInputs.forEach((inputs, index) => {
   for (const bound of ['min', 'max']) {
     inputs[bound].addEventListener('input', () => {
       // Move the opposite endpoint along if the handles cross.
@@ -199,6 +202,7 @@ cutInputs.forEach(inputs => {
         inputs[bound === 'min' ? 'max' : 'min'].value = inputs[bound].value;
       }
       updateCuts();
+      faceCut(cutAxes[index], bound);
     });
   }
 });
@@ -219,24 +223,59 @@ function initializeCuts() {
   document.getElementById('reset-cuts').disabled = false;
 }
 
-function fitCamera(targetBounds = null) {
+function fitCamera(targetBounds = null, direction = new THREE.Vector3(0.5, 0.3, 1), margin = 0.7) {
   const bounds = targetBounds instanceof THREE.Box3 ? targetBounds : new THREE.Box3().setFromObject(brain);
   if (bounds.isEmpty()) return;
   const sphere = bounds.getBoundingSphere(new THREE.Sphere());
   const vertical = THREE.MathUtils.degToRad(camera.fov) / 2;
   const horizontal = Math.atan(Math.tan(vertical) * camera.aspect);
   const radius = Math.max(sphere.radius, 0.01);
-  // The bounding sphere guarantees that every region stays inside the frame;
-  // retain only a slim two-percent visual safety margin around it.
-  const distance = radius / Math.sin(Math.min(vertical, horizontal)) * 0.7;
+  // Cut views use a full bounding-sphere fit; the default view retains its zoom.
+  const distance = radius / Math.sin(Math.min(vertical, horizontal)) * margin;
+  // Consume any pending drag/pan damping before applying an explicit camera view.
+  const damping = controls.enableDamping;
+  controls.enableDamping = false;
+  controls.update();
   controls.target.copy(sphere.center);
-  camera.position.copy(sphere.center).add(new THREE.Vector3(0.5, 0.3, 1).normalize().multiplyScalar(distance));
+  camera.position.copy(sphere.center).add(direction.clone().normalize().multiplyScalar(distance));
   camera.near = radius / 1000;
   camera.far = distance + radius * 100;
   camera.updateProjectionMatrix();
   controls.minDistance = radius * 0.2;
-  controls.maxDistance = radius * 5;
+  controls.maxDistance = Math.max(radius * 5, distance * 2);
   controls.update();
+  controls.enableDamping = damping;
+  requestRender();
+}
+
+function faceCut(axis, preferredBound = null) {
+  const index = cutAxes.indexOf(axis);
+  if (index < 0 || cutBounds.isEmpty()) return;
+  const lower = Number(cutInputs[index].min.value);
+  const upper = Number(cutInputs[index].max.value);
+  if (lower === 0 && upper === 100) return; // Removing a cut does not move the camera.
+  brain.updateMatrixWorld(true);
+  const normal = new THREE.Vector3();
+  normal[axis] = 1;
+  normal.transformDirection(brain.matrixWorld);
+  // Look from the removed side. For a slab, prefer the edited face (sliders)
+  // or whichever face is nearer the current viewing direction (assistant).
+  let bound = lower === 0 ? 'max' : upper === 100 ? 'min' : preferredBound;
+  if (!bound) {
+    bound = camera.position.clone().sub(controls.target).dot(normal) >= 0 ? 'max' : 'min';
+  }
+  if (bound === 'min') normal.negate();
+  const faceBounds = cutBounds.clone();
+  cutAxes.forEach((name, i) => {
+    const range = cutBounds.max[name] - cutBounds.min[name];
+    faceBounds.min[name] = cutBounds.min[name] + range * Number(cutInputs[i].min.value) / 100;
+    faceBounds.max[name] = cutBounds.min[name] + range * Number(cutInputs[i].max.value) / 100;
+  });
+  faceBounds.min[axis] = faceBounds.max[axis] = faceBounds[bound][axis];
+  faceBounds.applyMatrix4(brain.matrixWorld);
+  rotationToggle.checked = false;
+  lastFrameTime = null;
+  fitCamera(faceBounds, normal, 1.02);
 }
 
 function updateStatus() {
@@ -326,6 +365,7 @@ document.getElementById('reset').disabled = loaded === 0;
 if (!names.length) status.textContent = 'Keine .obj-Dateien in export_preview gefunden.';
 
 const regionMap = new Map(regions.map((region, index) => [names[index].slice(0, -4), region]));
+mentionGlow = createMentionGlow(THREE, scene, regionMap, cutPlanes, requestRender);
 
 function setRegionOpacity(region, opacity, makeVisible = true) {
   region.opacity = opacity;
@@ -357,6 +397,9 @@ function selectRegions(selected) {
 }
 
 export const assistantViewer = {
+  glowRegions(ids) { mentionGlow.glow(ids); },
+  clearMentionGlow() { mentionGlow.clear(); },
+  getMentionedRegions() { return mentionGlow.getActiveIds(); },
   getState() {
     const matching = predicate => [...regionMap].filter(([, region]) => region.object && predicate(region)).map(([id]) => id);
     return {
@@ -401,20 +444,21 @@ export const assistantViewer = {
           region.object.visible = false;
           region.checkbox.checked = false;
         } else {
-          setRegionOpacity(region, selected.includes(region) ? 1 : 0.01);
+          setRegionOpacity(region, selected.includes(region) ? 1 : 0.03);
         }
       }
       // Old cuts must not keep the newly requested anatomy out of view.
       document.getElementById('reset-cuts').click();
-      // Keep the full brain in frame instead of zooming onto the selected anatomy.
-      fitCamera();
+      // Preserve the current camera, zoom, pan and automatic rotation.
     } else if (action.name === 'set_cut') {
       const index = cutAxes.indexOf(args.axis);
       if (index < 0 || !Number.isFinite(args.min) || !Number.isFinite(args.max) || args.min < 0 || args.max > 100 || args.min > args.max) throw new Error('Ungültige Schnittgrenzen.');
       cutInputs[index].min.value = args.min;
       cutInputs[index].max.value = args.max;
       updateCuts();
+      faceCut(args.axis);
     } else if (action.name === 'reset_view') {
+      mentionGlow.clear();
       for (const region of regions) {
         if (region.object) setRegionOpacity(region, 1, false);
       }
@@ -432,7 +476,7 @@ export const assistantViewer = {
         if (!region.object) continue;
         const target = selected.includes(region);
         const visible = !region.optIn || target;
-        const opacity = target || !visible ? 1 : 0.01;
+        const opacity = target || !visible ? 1 : 0.03;
         let valid = region.object.visible === visible && region.highlighted === target;
         region.object.traverse(child => {
           if (child.isMesh && child.material.opacity !== opacity) valid = false;
@@ -446,9 +490,9 @@ export const assistantViewer = {
     return state;
   },
   describe(action) {
-    const labels = { highlight_regions: action.arguments.region_ids?.length ? 'Zielareale hervorgehoben (Umgebung 1 %)' : 'Auswahl aufgehoben', set_visibility: 'Sichtbarkeit geändert',
+    const labels = { highlight_regions: action.arguments.region_ids?.length ? 'Zielareale hervorgehoben (Umgebung 3 %)' : 'Auswahl aufgehoben', set_visibility: 'Sichtbarkeit geändert',
       set_opacity: `Deckkraft: ${Math.round(action.arguments.opacity * 100)} %`,
-      isolate_regions: 'Zielareale hervorgehoben (Umgebung 1 %)', set_cut: 'Schnitt eingestellt', reset_view: 'Ansicht zurückgesetzt' };
+      isolate_regions: 'Zielareale hervorgehoben (Umgebung 3 %)', set_cut: 'Schnitt eingestellt', reset_view: 'Ansicht zurückgesetzt' };
     return labels[action.name] + (action.arguments.region_ids?.length ? ': ' + action.arguments.region_ids.join(', ') : '');
   },
 };
