@@ -22,6 +22,8 @@ const aliases = [
     'Rinde des Großhirns', 'Kortex des Großhirns', 'Cortex des Großhirns']],
   [paired('Cerebral-White-Matter'), [...adjective('weiß', ['Substanz des Großhirns']),
     ...forms('Großhirnmark', ['', 's', 'es']), 'cerebral white matter']],
+  [paired('Cerebral-Cortex', 'Cerebral-White-Matter'), [...forms('Großhirn', ['', 's', 'es']),
+    ...forms('Cerebrum', ['', 's']), ...forms('Zerebrum', ['', 's'])]],
   [paired('Cerebellum-Cortex'), ['Kleinhirnrinde', 'Kleinhirnrinden', 'Kleinhirnkortex', 'cerebellar cortex',
     ...adjective('zerebellär', ['Kortex', 'Cortex']), ...adjective('cerebellär', ['Kortex', 'Cortex']),
     'Rinde des Kleinhirns', 'Kortex des Kleinhirns', 'Cortex des Kleinhirns']],

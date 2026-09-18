@@ -42,6 +42,43 @@ system trust stores. The original HTTP development command remains available.
 conversation, microphone, playback and view state alive. Use the small **×**
 button or Escape to return to the previous layout.
 
+## Appearance
+
+**Darstellung** in the existing panel switches between three styles:
+
+- **Lernen** keeps the original region colors and lighting.
+- **Natürlich** uses matte, muted rose/beige tissue with irregular tonal
+  variation and soft lighting, without specular reflections. Closed cuts show
+  cream-colored white matter and subtly differentiated gray matter/region tones;
+  the legend follows the cut colors while cuts are active. The palette is an
+  explanatory approximation, not measured tissue coloration. Gross-anatomy
+  references: [Stony Brook University](https://renaissance.stonybrookmedicine.edu/pathology/neuropathology/chapter1).
+- **Digital** is a translucent, self-lit cyan hologram with fine horizontal
+  light lines and a soft halo. Deeper layers fade to keep the folds readable.
+  Assistant focus colors selected regions amber; spoken mentions glow warm.
+
+The browser remembers the choice, including across mesh-detail reloads. If
+browser storage is blocked, switching still works for the current page.
+Styles preserve camera, rotation, visibility, manual opacity, selection and cuts.
+Automatic focus context uses 40% opacity in Digital and 3% in the other styles,
+and follows style changes while preserving explicit opacity edits;
+resetting the view keeps the selected style. Legend swatches and cut caps
+follow the displayed surface colors.
+
+Focus opacity is defined in `main/viewer_settings.py` and embedded in the page,
+so the renderer and the assistant's acknowledgement checks use the same settings.
+Restart the Python server after backend changes, then reload the browser. Reloading
+only JavaScript can otherwise leave an older server validating new display values.
+
+All styles reuse the same anatomical geometry and surface draw calls. Digital
+transparency and its CSS halo add compositing work; the assistant's opacity
+values multiply the hologram's own transparency. Its cut caps are also translucent.
+The new styles lazily cache softened vertex normals for lighting, without moving
+vertices or changing anatomical boundaries. The first switch can require a
+brief preparation; subsequent switches reuse those normals. No extra mesh
+download, texture assets or WebGL postprocessing passes are needed. The source
+geometry still limits how smooth and realistic the result can look.
+
 ## OpenAI assistant
 
 Set `OPENAI_API_KEY` in the server environment before starting. Never put it in
@@ -56,12 +93,13 @@ $env:OPENAI_API_KEY = "YOUR_API_KEY"
 The turn-by-turn, non-Realtime assistant can show/hide, visually emphasize,
 set axis cuts, and reset the view. Requests such as "zeige mir" or "markiere"
 use `isolate_regions`: targets have 100% opacity and every other loaded brain
-region remains visible at 3%, with original colors. CSF stays hidden unless
+region remains visible at 40% in **Digital**, otherwise 3%, using the selected appearance (original region
+colors in **Lernen**, rose in **Natürlich**, blue/amber in **Digital**). CSF stays hidden unless
 explicitly requested as a target. A new focus
 replaces the old one and clears old cuts while preserving camera perspective,
 zoom, pan and the user's rotation choice. Explicitly requested cuts are applied afterwards.
 Setting a cut (by assistant or slider) faces its exposed surface along the
-anatomical X, Y or Z axis and fits the complete cut face into view. Automatic
+anatomical X (sagittal), Y (coronal) or Z (axial/horizontal) axis and fits the complete cut face into view. These plane names also appear beside the sliders. Automatic
 rotation pauses to keep that view steady; it can be re-enabled with **Langsam
 drehen**. Removing the last cut resumes rotation if it was paused for the cut;
 a manually disabled rotation stays off. This also applies to slider changes,
@@ -70,6 +108,10 @@ Removing cuts leaves the camera in place. **Ansicht zurücksetzen**
 still restores the default camera view.
 The old `highlight_regions` name is no longer offered to the model;
 nonempty legacy calls apply the same visible focus.
+
+Technical action messages remain in the chat. The assistant is instructed to begin
+directly with the anatomical explanation, without repeating successful actions,
+context opacity or hidden CSF. Only unresolved tool errors need an explanation.
 
 The API receives region IDs and the current view state, not mesh geometry.
 Each browser action returns its own state snapshot. Focus success is checked
@@ -114,7 +156,9 @@ regions outside the current selection. The overlay is visible through other
 surfaces and respects cuts; selection, opacity, camera and visibility settings
 are never changed. Hidden CSF remains excluded. Reduced-motion settings replace
 pulsing with a steady glow. Names and left/right qualifiers are resolved against
-the loaded meshes by `static/region_mentions.js`. It includes explicit German
+the loaded meshes by `static/region_mentions.js`. The general names **Großhirn**
+and **Kleinhirn** cue their respective cortex and white-matter meshes together;
+specific cortex or white-matter names still cue only those meshes. It includes explicit German
 case/plural forms, Latin and English names, umlaut/ASCII spellings, typographic
 hyphens and common left/right qualifiers before or after the name. Additional
 terminology was checked against [NLM MeSH](https://www.ncbi.nlm.nih.gov/mesh/68002421)
@@ -185,6 +229,17 @@ open cuts. Caps share existing geometry buffers and do not create voxel data.
 
 ## Tests
 
+Run the appearance browser check with local Chrome and Python Playwright:
+
+```powershell
+.venv/Scripts/python.exe -m tests.verify_appearance
+```
+
+It checks all three styles, state preservation, assistant focus, cuts, rotation,
+saved preferences, blocked storage, full-detail geometry when available and the
+mobile selector. It saves screenshots as `verification/appearance-*.png` and
+makes no paid API calls.
+
 Run mocked unit tests without API calls:
 
 ```powershell
@@ -208,7 +263,7 @@ Playwright:
 
 `tests.verify_assistant_focus` reproduces the cortex-to-thalamus conversation
 through the real browser and Flask API with mocked model calls. It checks the
-visible change, 3% context, repeated focus, hidden regions, old cuts, CSF opt-in
+visible change, 40% digital / 3% other context, repeated focus, hidden regions, old cuts, CSF opt-in
 and the state returned to the model. It makes no billable API calls.
 
 `tests.verify_narration` checks name resolution, two-second glow expiry,

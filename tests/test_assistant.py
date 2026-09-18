@@ -324,6 +324,29 @@ class AssistantTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_action('highlight_regions', {'region_ids': []}, self.state['loaded'])
 
+    def test_focus_context_opacity_matches_appearance(self):
+        targets = ['Left-Thalamus', 'Right-Thalamus']
+        action = validate_action('isolate_regions', {'region_ids': targets}, self.state['loaded'])
+        # Validate the same configuration actually delivered to the renderer.
+        page = self.client.get('/').get_data(as_text=True)
+        settings = json.loads(re.search(r'<script id="focus-context-opacities"[^>]*>(.*?)</script>', page).group(1))
+        self.assertEqual(settings, {'learning': 0.03, 'natural': 0.03, 'digital': 0.4})
+        for style, opacity in [('learning', 0.03), ('natural', 0.03), ('digital', 0.4)]:
+            with self.subTest(style=style):
+                state = self.focus_state(targets)
+                state['appearance'] = style
+                for region_id in state['visible']:
+                    if region_id not in targets:
+                        state['opacities'][region_id] = settings[style]
+                clean = validate_state(state, self.state['loaded'])
+                self.assertEqual(clean['appearance'], style)
+                self.assertEqual(focus_result_error(action, clean), '')
+                clean['opacities']['Left-Cerebral-Cortex'] = 0.03 if style == 'digital' else 0.4
+                self.assertIn('nicht bestätigt', focus_result_error(action, clean))
+        for invalid in ['invalid', None, {}, True]:
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                validate_state({**self.state, 'appearance': invalid}, self.state['loaded'])
+
     def test_false_browser_success_is_reported_to_model_as_failure(self):
         targets = ['Left-Thalamus', 'Right-Thalamus']
         responses = [

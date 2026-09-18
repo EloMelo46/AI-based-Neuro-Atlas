@@ -1,5 +1,5 @@
 // Narration is a separate overlay: no edits to region visibility/materials/selection.
-export function createMentionGlow(THREE, scene, regionMap, cutPlanes, requestRender) {
+export function createMentionGlow(THREE, scene, regionMap, cutPlanes, requestRender, getAppearance = () => 'learning') {
   const active = new Map();
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
   const duration = 2000;
@@ -25,14 +25,19 @@ export function createMentionGlow(THREE, scene, regionMap, cutPlanes, requestRen
       region.object.traverse(surface => {
         if (!surface.isMesh) return;
         const material = new THREE.ShaderMaterial({
-          uniforms: { strength: { value: 0 }, glowColor: { value: new THREE.Color(0xffe6a3) } },
+          uniforms: {
+            strength: { value: 0 }, glowColor: { value: new THREE.Color(0xffe6a3) },
+            softness: surface.material.userData.appearance?.softness ?? { value: 0 },
+          },
           vertexShader: `
+            attribute vec3 brainSoftNormal;
+            uniform float softness;
             varying vec3 surfaceNormal;
             varying vec3 viewDirection;
             #include <clipping_planes_pars_vertex>
             void main() {
               vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-              surfaceNormal = normalize(normalMatrix * normal);
+              surfaceNormal = normalize(normalMatrix * mix(normal, brainSoftNormal, softness));
               viewDirection = -mvPosition.xyz;
               gl_Position = projectionMatrix * mvPosition;
               #include <clipping_planes_vertex>
@@ -52,6 +57,7 @@ export function createMentionGlow(THREE, scene, regionMap, cutPlanes, requestRen
           transparent: true, depthTest: false, depthWrite: false,
           blending: THREE.AdditiveBlending, side: THREE.FrontSide,
         });
+        material.defaultAttributeValues.brainSoftNormal = [0, 0, 1];
         const overlay = new THREE.Mesh(surface.geometry, material);
         overlay.matrixAutoUpdate = false;
         overlay.matrix.copy(surface.matrixWorld);
@@ -69,6 +75,7 @@ export function createMentionGlow(THREE, scene, regionMap, cutPlanes, requestRen
     requestRender();
   }
   function update(time) {
+    const styled = getAppearance() !== 'learning';
     for (const [id, entry] of active) {
       const elapsed = time - entry.started;
       if (elapsed >= duration || (entry.region.optIn && !entry.region.object.visible)) {
@@ -80,7 +87,11 @@ export function createMentionGlow(THREE, scene, regionMap, cutPlanes, requestRen
       for (const { surface, overlay } of entry.meshes) {
         surface.updateWorldMatrix(true, false);
         overlay.matrix.copy(surface.matrixWorld);
-        overlay.material.uniforms.strength.value = fade * pulse;
+        // With dense overlapping cortex surfaces, additive glow accumulates to
+        // white. The new appearances use a bounded warm tint instead.
+        overlay.material.blending = styled ? THREE.NormalBlending : THREE.AdditiveBlending;
+        overlay.material.uniforms.glowColor.value.set(styled ? 0xffb45d : 0xffe6a3);
+        overlay.material.uniforms.strength.value = fade * pulse * (styled ? 0.65 : 1);
       }
     }
     return active.size > 0;

@@ -11,9 +11,11 @@ if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from main.brain_assistant import create_assistant
     from main.mesh_catalog import available_mesh_names
+    from main.viewer_settings import FOCUS_CONTEXT_OPACITIES
 else:
     from .brain_assistant import create_assistant
     from .mesh_catalog import available_mesh_names
+    from .viewer_settings import FOCUS_CONTEXT_OPACITIES
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 MESH_DIR = PROJECT_ROOT / "export_preview"
@@ -72,6 +74,15 @@ HTML = r"""
   <button id="reset" disabled>Ansicht zurücksetzen</button>
   <p><label class="rotation-option"><input id="auto-rotate" type="checkbox" checked> Langsam drehen</label></p>
   <div class="viewer-settings">
+    <div class="appearance-setting">
+      <label for="appearance">Darstellung
+        <select id="appearance">
+          <option value="learning">Lernen</option>
+          <option value="natural">Natürlich</option>
+          <option value="digital">Digital</option>
+        </select>
+      </label>
+    </div>
     <label for="mesh-detail">Mesh-Details
       <select id="mesh-detail">
         <option value="optimized"{% if mesh_detail == 'optimized' %} selected{% endif %}>Optimiert · {{ preview_triangles }} Dreiecke</option>
@@ -104,13 +115,13 @@ HTML = r"""
   </details>
   <section id="cuts" aria-label="Schnittvolumen">
     <strong>Schnittvolumen</strong>
-    {% for axis, description in [('x', 'links ↔ rechts'), ('y', 'hinten ↔ vorne'), ('z', 'unten ↔ oben')] %}
+    {% for axis, plane, description in [('x', 'Sagittalebene', 'links ↔ rechts'), ('y', 'Koronalebene', 'hinten ↔ vorne'), ('z', 'Axialebene (horizontal)', 'unten ↔ oben')] %}
     <fieldset disabled id="cut-{{ axis }}">
-      <legend>{{ axis|upper }} · {{ description }}</legend>
+      <legend>{{ axis|upper }} · {{ plane }}<span class="cut-direction">{{ description }}</span></legend>
       {% for bound, label, value in [('min', 'Von', 0), ('max', 'Bis', 100)] %}
       <label for="{{ axis }}-{{ bound }}">
         <span>{{ label }}</span>
-        <input id="{{ axis }}-{{ bound }}" type="range" min="0" max="100" step="0.1" value="{{ value }}" aria-label="{{ axis|upper }} {{ label }}">
+        <input id="{{ axis }}-{{ bound }}" type="range" min="0" max="100" step="0.1" value="{{ value }}" aria-label="{{ plane }} ({{ axis|upper }}) {{ label }}">
         <output id="{{ axis }}-{{ bound }}-value" for="{{ axis }}-{{ bound }}">{{ value }} %</output>
       </label>
       {% endfor %}
@@ -151,6 +162,7 @@ HTML = r"""
 <script type="module" src="{{ url_for('static', filename='viewer_ui.js') }}"></script>
 <script type="module" src="{{ url_for('static', filename='assistant_bridge.js') }}"></script>
 <script id="mesh-list" type="application/json">{{ meshes|tojson }}</script>
+<script id="focus-context-opacities" type="application/json">{{ focus_context_opacities|tojson }}</script>
 <script>
   import({{ url_for('static', filename='brain_viewer.js')|tojson }}).catch((error) => {
     document.getElementById('status').textContent = '3D-Ansicht konnte nicht gestartet werden.';
@@ -181,7 +193,7 @@ def index():
     triangle_label = lambda count: f'{count:,}'.replace(',', chr(0x2019)) if count else '–'
     return render_template_string(
         HTML, meshes=meshes, count=len(meshes), mesh_detail=mesh_detail,
-        full_mesh_available=full_mesh_available,
+        full_mesh_available=full_mesh_available, focus_context_opacities=FOCUS_CONTEXT_OPACITIES,
         preview_triangles=triangle_label(preview_count), full_triangles=triangle_label(full_count))
 
 @app.route("/mesh/<path:filename>")

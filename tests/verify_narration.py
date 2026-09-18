@@ -420,6 +420,39 @@ def main():
             page.wait_for_function("!document.getElementById('assistant-send').disabled")
             print('PASS: repeated anatomy mentions glow without any transcription request.', flush=True)
 
+            # Reproduce the reported brain-stem explanation in Digital, with
+            # both text-only cues and actual audio playback. The brain stem
+            # must remain the selection while cerebrum and cerebellum glow.
+            page.locator('#appearance').select_option('digital')
+            page.evaluate("viewer.execute({name:'isolate_regions', arguments:{region_ids:['Brain-Stem']}})")
+            brainstem_state = page.evaluate('viewer.getState()')
+            assert brainstem_state['opacities']['Left-Cerebral-Cortex'] == 0.4
+            cerebral = ['Left-Cerebral-Cortex', 'Right-Cerebral-Cortex',
+                        'Left-Cerebral-White-Matter', 'Right-Cerebral-White-Matter']
+            cerebellar = ['Left-Cerebellum-Cortex', 'Right-Cerebellum-Cortex',
+                          'Left-Cerebellum-White-Matter', 'Right-Cerebellum-White-Matter']
+            excerpt = 'Außerdem verlaufen durch ihn zahlreiche Nervenbahnen zwischen Großhirn, Kleinhirn und Rückenmark.'
+            for read_aloud in (False, True):
+                page.locator('#assistant-speak').set_checked(read_aloud)
+                page.evaluate('cues.length = 0')
+                ask(excerpt)
+                page.wait_for_function('cues.length >= 1', timeout=10000)
+                assert page.evaluate('cues[0].ids') == cerebral
+                assert 'Left-Cerebral-Cortex' in page.evaluate('viewer.getMentionedRegions()')
+                page.wait_for_function('cues.length === 2', timeout=10000)
+                assert page.evaluate('cues[1].ids') == cerebellar
+                assert page.evaluate('cues.every(c => c.playing)') == read_aloud
+                assert page.evaluate('viewer.getState()') == brainstem_state
+                page.screenshot(path=str(output / f'brainstem-mentions-{"audio" if read_aloud else "text"}.png'))
+                page.locator('#assistant-new').click()
+                page.wait_for_function("!document.getElementById('assistant-send').disabled")
+                assert page.evaluate('viewer.getMentionedRegions()') == []
+                assert page.evaluate('viewer.getState()') == brainstem_state
+            page.locator('#appearance').select_option('learning')
+            page.evaluate('(ids) => viewer.execute({name:"isolate_regions", arguments:{region_ids:ids}})', thalamus)
+            assert page.evaluate('viewer.getState()') == persistent
+            print('PASS: brain-stem explanation cues cerebrum and cerebellum in text/audio, preserving selection and 40% digital context.', flush=True)
+
             # Browser fallback without MSE uses the same actual-playback cue contract.
             wav = io.BytesIO()
             with wave.open(wav, 'wb') as file:

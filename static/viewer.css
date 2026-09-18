@@ -8,6 +8,9 @@ body { font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; color: #e8
 #fullscreen-toggle { white-space: nowrap; }
 #fullscreen-status { position: fixed; top: 66px; right: 16px; z-index: 50; max-width: min(360px, calc(100vw - 32px)); padding: 12px 16px; background: #223043; border: 1px solid var(--line); border-radius: 12px; }
 #scene { position: fixed; inset: 84px 374px 20px 334px; }
+body[data-appearance="natural"] #scene { background: radial-gradient(ellipse at 50% 42%, #342a32 0%, #201f29 36%, #10141c 72%); }
+body[data-appearance="digital"] #scene { background: radial-gradient(ellipse at 50% 45%, #082a52 0%, #0b1b32 38%, #10141c 72%); }
+body[data-appearance="digital"] #scene canvas { filter: drop-shadow(0 0 7px #22bfff66) drop-shadow(0 0 22px #157eff33); }
 #scene canvas { width: 100%; height: 100%; touch-action: none; outline: none; }
 #info, #assistant-panel { position: fixed; top: 88px; bottom: 20px; max-height: none; border: 1px solid var(--line); background: linear-gradient(155deg, #182230, #121923); border-radius: 20px; padding: 20px; box-shadow: 0 14px 40px #0003; overflow: auto; scrollbar-width: thin; scrollbar-color: #3d5066 transparent; overscroll-behavior: contain; }
 #info { left: 16px; width: 302px; max-width: none; }
@@ -29,6 +32,7 @@ select { max-width: 100%; min-height: 40px; padding: 8px; border: 1px solid #354
 .viewer-settings { display: grid; gap: 12px; margin-top: 12px; }
 .viewer-settings label { display: grid; gap: 5px; color: var(--muted); font-size: 12px; }
 .viewer-settings select { width: 100%; color: #e8eef5; }
+.appearance-setting { padding-bottom: 12px; border-bottom: 1px solid var(--line); }
 input[type="checkbox"] { accent-color: var(--accent); width: 18px; height: 18px; margin: 0; flex-shrink: 0; }
 #region-legend { border: 0; border-top: 1px solid var(--line); border-radius: 0; padding: 18px 0 0; margin-top: 22px; }
 summary { font-size: 14px; padding: 4px 0; cursor: pointer; }
@@ -39,6 +43,7 @@ summary { font-size: 14px; padding: 4px 0; cursor: pointer; }
 #cuts { border-top: 1px solid var(--line); padding-top: 20px; margin-top: 22px; }
 #cuts fieldset { margin: 14px 0; border-color: var(--line); border-radius: 12px; padding: 12px; min-width: 0; }
 #cuts legend { color: #c8d6e5; font-size: 12px; padding: 0 5px; }
+#cuts .cut-direction { display: block; color: var(--muted); font-size: 11px; }
 #cuts label { grid-template-columns: 28px minmax(50px, 1fr) 50px; font-size: 12px; }
 #cuts input[type="range"] { min-width: 0; min-height: 32px; accent-color: var(--accent); }
 #cuts label:has(input[type="checkbox"]) { display: flex; gap: 10px; }

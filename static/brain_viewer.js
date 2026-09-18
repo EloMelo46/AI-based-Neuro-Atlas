@@ -3,6 +3,7 @@ import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { createCutCaps } from './cut_caps.js';
 import { createMentionGlow } from './mention_glow.js';
+import { createBrainAppearance } from './brain_appearance.js';
 import { attachViewer } from './assistant_bridge.js';
 
 // FreeSurfer triangle surfaces: two header lines, big-endian float32
@@ -47,14 +48,14 @@ const status = document.getElementById('status');
 const errors = document.getElementById('errors');
 const names = JSON.parse(document.getElementById('mesh-list').textContent);
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x10141c);
+// Transparent canvas lets each appearance use a subtle CSS backdrop.
 const brain = new THREE.Group();
 // FreeSurfer RAS: Z points superior; Three.js: Y points up.
 brain.rotation.x = -Math.PI / 2;
 scene.add(brain);
 const sceneHost = document.getElementById('scene');
 const camera = new THREE.PerspectiveCamera(45, sceneHost.clientWidth / sceneHost.clientHeight, 0.1, 2000);
-const renderer = new THREE.WebGLRenderer({ antialias: true, stencil: true });
+const renderer = new THREE.WebGLRenderer({ antialias: true, stencil: true, alpha: true });
 renderer.localClippingEnabled = true;
 renderer.setPixelRatio(1);
 renderer.setSize(sceneHost.clientWidth, sceneHost.clientHeight);
@@ -120,25 +121,29 @@ document.getElementById('resolution').addEventListener('change', () => {
   requestRender();
 });
 document.getElementById('fill-cuts').addEventListener('change', requestRender);
-scene.add(new THREE.HemisphereLight(0xffffff, 0x69758c, 1.2));
-const light = new THREE.DirectionalLight(0xffffff, 1);
-light.position.set(1, 2, 3);
-scene.add(light);
 let loaded = 0;
 let failed = 0;
 
-// Keep the sorted file order and share each color between mesh and legend.
+// Keep sorted file order and retain the original learning color for every region.
 const regions = names.map((name, index) => {
   const color = new THREE.Color().setHSL((index * 0.61803398875) % 1, 0.65, 0.6);
   const checkbox = document.getElementById(`region-${index}`);
   const state = document.getElementById(`region-state-${index}`);
-  document.getElementById(`region-color-${index}`).style.backgroundColor = color.getStyle();
-  const region = { color, checkbox, state, object: null, optIn: name === 'CSF.obj' };
+  const swatch = document.getElementById(`region-color-${index}`);
+  const region = { id: name.slice(0, -4), color, checkbox, state, swatch, object: null, optIn: name === 'CSF.obj' };
   checkbox.addEventListener('change', () => {
     if (region.object) region.object.visible = checkbox.checked;
     updateRegionCount();
   });
   return region;
+});
+const appearance = createBrainAppearance(THREE, scene, regions, requestRender, () => {
+  // Only automatic context follows the style. Explicit opacity edits survive.
+  for (const region of regions) {
+    if (region.object && region.focusContext) {
+      setRegionOpacity(region, appearance.getContextOpacity(), false, true);
+    }
+  }
 });
 
 function updateRegionCount() {
@@ -181,6 +186,7 @@ const cutInputs = cutAxes.map(axis => ({
 function updateCuts() {
   if (cutBounds.isEmpty()) return;
   const hasCuts = cutInputs.some(inputs => Number(inputs.min.value) > 0 || Number(inputs.max.value) < 100);
+  appearance.setCutsActive(hasCuts);
   if (!hasCuts && resumeRotationAfterCuts) {
     rotationToggle.checked = true;
     resumeRotationAfterCuts = false;
@@ -230,6 +236,7 @@ function initializeCuts() {
   if (!loaded) return;
   brain.updateMatrixWorld(true);
   cutBounds.setFromObject(brain).applyMatrix4(brain.matrixWorld.clone().invert());
+  appearance.setBounds(cutBounds);
   updateCuts();
   cutAxes.forEach(axis => { document.getElementById(`cut-${axis}`).disabled = false; });
   document.getElementById('reset-cuts').disabled = false;
@@ -308,15 +315,7 @@ async function loadRegion(name, index) {
       triangles += (child.geometry.index?.count ?? child.geometry.attributes.position?.count ?? 0) / 3;
       const oldMaterials = Array.isArray(child.material) ? child.material : [child.material];
       oldMaterials.forEach(material => material.dispose());
-      child.material = new THREE.MeshPhongMaterial({
-        color: regions[index].color,
-        side: THREE.DoubleSide,
-        shininess: 20,
-        transparent: false,
-        opacity: 1,
-        depthWrite: true,
-        clippingPlanes: cutPlanes,
-      });
+      child.material = appearance.createMaterial(regions[index], cutPlanes, child.geometry);
     });
     if (!triangles) throw new Error('Datei enthält keine Dreiecksflächen.');
     object.name = name;
@@ -378,22 +377,20 @@ document.getElementById('reset').disabled = loaded === 0;
 if (!names.length) status.textContent = 'Keine .obj-Dateien in export_preview gefunden.';
 
 const regionMap = new Map(regions.map((region, index) => [names[index].slice(0, -4), region]));
-mentionGlow = createMentionGlow(THREE, scene, regionMap, cutPlanes, requestRender);
+mentionGlow = createMentionGlow(THREE, scene, regionMap, cutPlanes, requestRender, appearance.getStyle);
 
-function setRegionOpacity(region, opacity, makeVisible = true) {
+function setRegionOpacity(region, opacity, makeVisible = true, focusContext = false) {
   region.opacity = opacity;
+  region.focusContext = focusContext;
   if (makeVisible) {
     region.object.visible = true;
     region.checkbox.checked = true;
   }
   region.object.traverse(child => {
     if (!child.isMesh) return;
-    const transparent = opacity < 1;
-    if (child.material.transparent !== transparent) child.material.needsUpdate = true;
     child.material.opacity = opacity;
-    child.material.transparent = transparent;
-    child.material.depthWrite = !transparent;
   });
+  appearance.applyRegion(region);
   region.state.textContent = opacity < 1 ? `${Math.round(opacity * 100)} % deckend` : '';
 }
 
@@ -401,11 +398,8 @@ function selectRegions(selected) {
   for (const region of regions) {
     if (!region.object) continue;
     region.highlighted = selected.includes(region);
-    region.object.traverse(child => {
-      if (!child.isMesh) return;
-      child.material.color.copy(region.color);
-      child.material.emissive.set(0x000000);
-    });
+    if (!selected.length) region.focusContext = false;
+    appearance.applyRegion(region);
   }
 }
 
@@ -416,6 +410,7 @@ export const assistantViewer = {
   getState() {
     const matching = predicate => [...regionMap].filter(([, region]) => region.object && predicate(region)).map(([id]) => id);
     return {
+      appearance: appearance.getStyle(),
       loaded: matching(() => true), visible: matching(region => region.object.visible),
       highlighted: matching(region => region.highlighted),
       opacities: Object.fromEntries([...regionMap].filter(([, region]) => region.object).map(([id, region]) => [id, region.opacity ?? 1])),
@@ -457,7 +452,8 @@ export const assistantViewer = {
           region.object.visible = false;
           region.checkbox.checked = false;
         } else {
-          setRegionOpacity(region, selected.includes(region) ? 1 : 0.03);
+          const target = selected.includes(region);
+          setRegionOpacity(region, target ? 1 : appearance.getContextOpacity(), true, !target);
         }
       }
       // Old cuts must not keep the newly requested anatomy out of view.
@@ -489,7 +485,7 @@ export const assistantViewer = {
         if (!region.object) continue;
         const target = selected.includes(region);
         const visible = !region.optIn || target;
-        const opacity = target || !visible ? 1 : 0.03;
+        const opacity = target || !visible ? 1 : appearance.getContextOpacity();
         let valid = region.object.visible === visible && region.highlighted === target;
         region.object.traverse(child => {
           if (child.isMesh && child.material.opacity !== opacity) valid = false;
@@ -503,9 +499,10 @@ export const assistantViewer = {
     return state;
   },
   describe(action) {
-    const labels = { highlight_regions: action.arguments.region_ids?.length ? 'Zielareale hervorgehoben (Umgebung 3 %)' : 'Auswahl aufgehoben', set_visibility: 'Sichtbarkeit geändert',
+    const focusLabel = `Zielareale hervorgehoben (Umgebung ${Math.round(appearance.getContextOpacity() * 100)} %)`;
+    const labels = { highlight_regions: action.arguments.region_ids?.length ? focusLabel : 'Auswahl aufgehoben', set_visibility: 'Sichtbarkeit geändert',
       set_opacity: `Deckkraft: ${Math.round(action.arguments.opacity * 100)} %`,
-      isolate_regions: 'Zielareale hervorgehoben (Umgebung 3 %)', set_cut: 'Schnitt eingestellt', reset_view: 'Ansicht zurückgesetzt' };
+      isolate_regions: focusLabel, set_cut: 'Schnitt eingestellt', reset_view: 'Ansicht zurückgesetzt' };
     return labels[action.name] + (action.arguments.region_ids?.length ? ': ' + action.arguments.region_ids.join(', ') : '');
   },
 };

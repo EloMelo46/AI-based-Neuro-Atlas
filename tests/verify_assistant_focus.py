@@ -20,12 +20,15 @@ def assert_focus(state, targets):
     assert set(state['highlighted']) == set(targets), state
     assert set(state['visible']) == set(state['loaded']) - ({'CSF'} - set(targets)), state
     for region_id in state['visible']:
-        assert state['opacities'][region_id] == (1 if region_id in targets else 0.03), state
+        context = 0.4 if state.get('appearance') == 'digital' else 0.03
+        assert state['opacities'][region_id] == (1 if region_id in targets else context), state
     assert all(interval == [0, 100] for interval in state['cuts'].values()), state
 
 
 def main():
     responses, payloads = [], []
+    output = PROJECT_ROOT / 'verification'
+    output.mkdir(exist_ok=True)
 
     def stream(payload, _entry):
         payloads.append(copy.deepcopy(payload))
@@ -54,12 +57,12 @@ def main():
             assert not set(loaded) & {'lh.pial', 'rh.pial', 'lh.white', 'rh.white', 'lh_hippo_mc'}
             assert 'CSF' not in page.evaluate('viewer.getState().visible')
 
-            def ask(question, targets, name='isolate_regions'):
+            def ask(question, targets, name='isolate_regions', explanation='Anatomische Erklärung.'):
                 responses.extend([
                     {'output': [{'type': 'function_call', 'call_id': 'focus', 'name': name,
                                  'arguments': json.dumps({'region_ids': targets})}]},
                     {'output': [{'type': 'message', 'content': [{'type': 'output_text',
-                                 'text': 'Die Zielareale sind hervorgehoben.', 'annotations': []}]}]},
+                                 'text': explanation, 'annotations': []}]}]},
                 ])
                 page.locator('#assistant-input').fill(question)
                 page.locator('#assistant-send').click()
@@ -69,9 +72,13 @@ def main():
                 receipt = next(json.loads(item['output']) for item in payloads[-1]['input']
                                if item.get('type') == 'function_call_output')
                 assert receipt['ok'], receipt
+                assert not receipt['error'], receipt
                 assert receipt['state'] == state, receipt
-                assert page.locator('.assistant-message.action').last.inner_text().startswith('Zielareale hervorgehoben (Umgebung 3 %)')
+                percent = 40 if state.get('appearance') == 'digital' else 3
+                assert page.locator('.assistant-message.action').last.inner_text().startswith(f'Zielareale hervorgehoben (Umgebung {percent} %)')
                 assert page.locator('.assistant-message.error').count() == 0
+                assert page.locator('.assistant-message').last.inner_text() == explanation
+                assert 'Beginne deine Antwort direkt mit der fachlichen Erklärung.' in payloads[-1]['instructions']
                 print('PASS:', question, flush=True)
                 return state
 
@@ -96,6 +103,19 @@ def main():
 
             ask('Zeige ausdruecklich die Gehirnfluessigkeit CSF.', ['CSF'])
             ask('Zeige wieder den Thalamus.', thalamus)
+            page.locator('#appearance').select_option('digital')
+            assert_focus(page.evaluate('viewer.getState()'), thalamus)
+            ask('Zeige den Hippocampus im digitalen Modus.', ['Left-Hippocampus', 'Right-Hippocampus'])
+            page.locator('#appearance').select_option('natural')
+            ask('Zeige den Thalamus im natürlichen Modus.', thalamus)
+            page.locator('#appearance').select_option('learning')
+            for style in ('learning', 'natural', 'digital'):
+                page.locator('#appearance').select_option(style)
+                ask('Zeige den Hippocampus und den Thalamus und erkläre sie.',
+                    ['Left-Hippocampus', 'Right-Hippocampus', *thalamus],
+                    explanation='Der Hippocampus ist wichtig für neue Erinnerungen. Der Thalamus verarbeitet und verteilt Informationen.')
+            page.screenshot(path=str(output / 'focus-hippocampus-thalamus.png'))
+            page.locator('#appearance').select_option('learning')
             page.evaluate("viewer.execute({name:'reset_view', arguments:{}})")
             reset = page.evaluate('viewer.getState()')
             assert set(reset['visible']) == set(reset['loaded']) - {'CSF'}
@@ -115,13 +135,11 @@ def main():
             assert transparent_image != opaque_image
             assert not errors, errors
             assert not responses, responses
-            output = PROJECT_ROOT / 'verification'
-            output.mkdir(exist_ok=True)
             (output / 'focus-cortex.png').write_bytes(cortex_image)
             (output / 'focus-thalamus.png').write_bytes(thalamus_image)
             (output / 'anatomical-cortex-opacity.png').write_bytes(transparent_image)
             browser.close()
-            print('PASS: visible focus, 3% context, CSF opt-in, old cuts, per-action acknowledgements, reset.')
+            print('PASS: focus in all styles, 40%/3% context, CSF opt-in, old cuts, per-action acknowledgements, reset.')
     finally:
         server.shutdown()
 
