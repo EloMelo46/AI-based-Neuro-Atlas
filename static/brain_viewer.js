@@ -4,6 +4,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { createCutCaps } from './cut_caps.js';
 import { createMentionGlow } from './mention_glow.js';
 import { createBrainAppearance } from './brain_appearance.js';
+import { attachGestureControl } from './gesture_control.js';
 import { attachViewer } from './assistant_bridge.js';
 
 // FreeSurfer triangle surfaces: two header lines, big-endian float32
@@ -63,6 +64,12 @@ sceneHost.appendChild(renderer.domElement);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 const rotationToggle = document.getElementById('auto-rotate');
+const GESTURE_ROTATION_RESUME_MS = 10_000;
+let gestureRotationResumeTimer = null;
+function cancelGestureRotationResume() {
+  window.clearTimeout(gestureRotationResumeTimer);
+  gestureRotationResumeTimer = null;
+}
 let resumeRotationAfterCuts = false;
 let interacting = false;
 let lastFrameTime = null;
@@ -70,6 +77,7 @@ const rotationOffset = new THREE.Vector3();
 controls.addEventListener('start', () => { interacting = true; });
 controls.addEventListener('end', () => { interacting = false; lastFrameTime = null; requestRender(); });
 rotationToggle.addEventListener('change', () => {
+  cancelGestureRotationResume();
   // A manual choice supersedes a rotation pause made for a cut view.
   resumeRotationAfterCuts = false;
   lastFrameTime = null;
@@ -507,3 +515,25 @@ export const assistantViewer = {
   },
 };
 if (loaded) attachViewer(assistantViewer);
+
+if (loaded) attachGestureControl({
+  camera, controls, requestRender,
+  onGrab() {
+    // A new grab cancels the countdown from the previous release.
+    cancelGestureRotationResume();
+    rotationToggle.checked = false;
+    resumeRotationAfterCuts = false;
+    lastFrameTime = null;
+    requestRender();
+  },
+  onRelease() {
+    cancelGestureRotationResume();
+    gestureRotationResumeTimer = window.setTimeout(() => {
+      gestureRotationResumeTimer = null;
+      rotationToggle.checked = true;
+      resumeRotationAfterCuts = false;
+      lastFrameTime = null;
+      requestRender();
+    }, GESTURE_ROTATION_RESUME_MS);
+  },
+});

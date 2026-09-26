@@ -114,7 +114,7 @@ def run(args):
     try:
         import waitress  # noqa: F401 -- fail before starting either process
     except ImportError as error:
-        raise RuntimeError('Install HTTPS dependencies: python -m pip install -r requirements-https.txt') from error
+        raise RuntimeError('Install HTTPS dependencies: python -m pip install -r requirements.txt') from error
     if args.port == args.backend_port:
         raise RuntimeError('HTTPS and backend ports must be different.')
     ensure_free_port('0.0.0.0', args.port)
@@ -127,13 +127,28 @@ def run(args):
                      NEURO_HTTPS_SITES=', '.join(site_url(host, args.port) for host in hosts),
                      NEURO_BACKEND_PORT=str(args.backend_port))
     caddy_env.pop('OPENAI_API_KEY', None)
+    # Generated runtime configuration also works without a repository Caddyfile.
+    config = state_dir / 'Caddyfile'
+    config.write_text("""{
+    admin off
+    auto_https disable_redirects
+    skip_install_trust
+    storage file_system {
+        root {$NEURO_TLS_STORAGE}
+    }
+}
+{$NEURO_HTTPS_SITES} {
+    tls internal
+    reverse_proxy 127.0.0.1:{$NEURO_BACKEND_PORT}
+}
+""", encoding='utf-8')
     processes = []
     try:
         backend = start_process([sys.executable, '-m', 'main.https_server', '--backend',
                                  '--backend-port', str(args.backend_port)], os.environ.copy())
         processes.append(backend)
         wait_ready(f'http://127.0.0.1:{args.backend_port}/api/assistant/config', processes)
-        proxy = start_process([str(caddy), 'run', '--config', str(PROJECT_ROOT / 'Caddyfile'),
+        proxy = start_process([str(caddy), 'run', '--config', str(config),
                                '--adapter', 'caddyfile'], caddy_env)
         processes.append(proxy)
         root_certificate = storage / 'pki' / 'authorities' / 'local' / 'root.crt'
@@ -167,7 +182,13 @@ def main():
     args = parser.parse_args()
     try:
         if args.backend:
-            create_backend(args.backend_port).run()
+            from main.brain_viewer import gestures
+            if os.environ.get('NEURO_GESTURES') == '1':
+                gestures.start()
+            try:
+                create_backend(args.backend_port).run()
+            finally:
+                gestures.stop()
         else:
             run(args)
     except KeyboardInterrupt:

@@ -2,7 +2,7 @@
 
 ## Setup
 
-Create a virtual environment, install the runtime dependency, and start the app.
+Create a virtual environment, install the runtime dependencies, and start the app.
 
 Windows PowerShell:
 
@@ -20,14 +20,16 @@ python3 -m venv .venv
 .venv/bin/python -m main.brain_viewer
 ```
 
-Then open http://localhost:5000. The 3D viewer requires WebGL and an internet
-connection to load Three.js from jsDelivr.
+Then open http://localhost:5000. The 3D viewer requires WebGL. Three.js 0.152.2 is bundled under
+`static/vendor/three` (MIT license included), so rendering and gestures work
+locally without an internet connection. Only the optional OpenAI assistant
+requires internet access.
 
 For microphone access from a phone or Raspberry Pi over the LAN, use the
 optional HTTPS server with Caddy and Waitress:
 
 ```powershell
-.venv/Scripts/python.exe -m pip install -r requirements-https.txt
+.venv/Scripts/python.exe -m pip install -r requirements.txt
 .venv/Scripts/python.exe -m main.https_server --host 192.168.1.213
 ```
 
@@ -41,6 +43,106 @@ system trust stores. The original HTTP development command remains available.
 **Vollbild** hides both side panels and the mobile navigation, keeping the
 conversation, microphone, playback and view state alive. Use the small **×**
 button or Escape to return to the previous layout.
+
+## Raspberry Pi 5: lokale Gestensteuerung
+
+Flask, Kameraverarbeitung und Chromium laufen auf demselben Pi. MediaPipe läuft
+auf der CPU; die IMX500 liefert das Kamerabild. Die Gesten verändern direkt die
+Three.js-Kamera um das Gehirn herum. Es werden **keine Mausereignisse** erzeugt;
+`evdev`, `/dev/uinput` und eine udev-Regel sind dafür nicht erforderlich.
+
+Auf Raspberry Pi OS **64 Bit mit Desktop** im Projektordner:
+
+```bash
+sudo apt update
+sudo apt install imx500-all python3-picamera2 python3-opencv python3-venv libportaudio2 chromium
+python3 -m venv --system-site-packages .venv
+.venv/bin/python -m pip install -r requirements-pi.txt
+```
+
+`--system-site-packages` ist für Picamera2 und libcamera aus den OS-Paketen nötig.
+Nach erstmaliger Installation der Kamerafirmware neu starten. Bei einer bereits
+vorhandenen virtuellen Umgebung deren Systempaket-Zugriff prüfen oder sie mit
+`python3 -m venv --system-site-packages .venv` entsprechend aktualisieren.
+
+Das Handmodell liegt im Projekt unter `models/hand_landmarker.task`.
+Falls es bei einem neuen Checkout fehlt:
+
+```bash
+mkdir -p models
+curl -fL https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task -o models/hand_landmarker.task
+```
+
+Start (ein Python-Prozess für Webserver und Kameraverarbeitung, **ohne sudo**):
+
+```bash
+.venv/bin/python -m main.brain_viewer --gestures
+```
+
+Dann in Chromium **http://localhost:5000** öffnen. Optional in einem zweiten
+Terminal als Wandanzeige: `chromium --kiosk http://localhost:5000`.
+`Strg+C` im Serverterminal beendet den Server und gibt die Kamera frei.
+Ohne `--gestures` funktioniert der Viewer weiterhin mit Maus/Touch und benötigt
+nur `requirements.txt`. Auch `python -m main.gesture_control` startet den
+integrierten Viewer mit Gesten. Keinen zweiten Kameraprozess parallel starten.
+
+**Bedienung:** Daumen (Landmark 4) und Zeigefinger (8) zusammenführen, dann die
+Hand seitlich oder nach oben/unten bewegen. Finger öffnen oder Hand aus dem
+Bild nehmen beendet das Drehen. Offene Hände verändern die Ansicht nicht.
+Greifen pausiert **Langsam drehen**. Nach dem Loslassen (auch bei Handverlust)
+bleibt die Ansicht 10 Sekunden stehen, danach startet die automatische Drehung
+wieder. Erneutes Greifen bricht den Timer ab; erst nach dem nächsten Loslassen
+beginnen erneut 10 Sekunden. Eine manuelle Änderung von **Langsam drehen**
+hebt den laufenden Timer auf. Zoom, Fokus und anatomische Schnittachsen bleiben
+erhalten. Die Wartezeit steht als `GESTURE_ROTATION_RESUME_MS = 10_000` in
+`static/brain_viewer.js`.
+
+Im Seitenpanel zeigt **Mit Handgesten drehen** den Zustand und erlaubt es, die
+Gesten für diese Browseransicht zu pausieren. **Kameravorschau mit Handpunkten**
+zeigt das gespiegelte Bild, die Nummern, die Verbindung 4–8 und den Zugpfeil.
+Die Vorschau wird nur auf Anfrage aufbereitet; geschlossen spart sie CPU.
+
+Parameter in `main/gesture_control.py`:
+
+| Parameter | Standard | Wirkung |
+| --- | --- | --- |
+| `IDLE_FPS` | 3 | Auswertungen/s ohne aktive Hand |
+| `IDLE_TIMEOUT_SECONDS` | 60 | Rückkehr zum Sparmodus nach letzter erkannter Hand |
+| `ACTIVE_FPS` | 20 | Obergrenze im aktiven Modus; tatsächlich abhängig von CPU-Last |
+| `PINCH_CLOSE` / `PINCH_OPEN` | 0.40 / 0.55 | Greifen/Loslassen relativ zur Handbreite 5–17 |
+| `POINTER_SMOOTHING` | 0.4 | Glättung des Handpunkts; kleiner bedeutet ruhiger und träger |
+
+Die Drehgeschwindigkeit steht als `ROTATION_SENSITIVITY` in
+`static/gesture_control.js`. Serverparameter erfordern einen Neustart,
+JavaScript-Änderungen ein Neuladen der Webseite.
+
+Der Browser liest kleine Zustandsmeldungen vom lokalen Flask-Server (aktiv
+höchstens 20/s, sparsam etwa 3/s). Kumulierte Bewegungen verhindern den Verlust
+von Zwischenschritten. Nach Neuladen, Verbindungsabbruch oder einem versteckten
+Tab wird eine neue Ausgangsposition verwendet, damit alte Bewegungen nicht
+nachträglich abgespielt werden. Ohne Kamerabilder wird das Greifen freigegeben.
+Mehrere sichtbare Browseransichten mit aktivierter Gestensteuerung empfangen
+jeweils dieselben Handbewegungen.
+
+Für weniger Grafiklast auf dem Pi: **Mesh-Details: Optimiert**,
+**Bildauflösung: Sparsam** und **Langsam drehen** ausschalten, wenn das Modell
+ruhig stehen soll. Die optionale Kameravorschau benötigt zusätzliche CPU-Zeit.
+
+Die HTTPS-Variante bleibt für LAN-Clients verfügbar. Auf dem Pi zusätzlich
+`requirements-pi.txt` installieren und mit `NEURO_GESTURES=1` starten:
+
+```bash
+NEURO_GESTURES=1 .venv/bin/python -m main.https_server --host <LAN-IP-des-Pi>
+```
+
+Für den Browser auf demselben Pi genügt `http://localhost:5000`, auch für den
+Mikrofonzugriff. Kamera und deren Vorschau werden nicht an OpenAI gesendet.
+Wenn der Server bewusst im LAN bereitgestellt wird, ist auch die Gestenvorschau
+für dessen Clients erreichbar.
+
+Eine früher installierte `/etc/udev/rules.d/70-gesture-uinput.rules` wird vom
+neuen Programm nicht verwendet. Sie kann entfernt werden, sofern kein anderes
+Programm sie benötigt; diese Änderung entfernt keine Systemregeln automatisch.
 
 ## Appearance
 
@@ -285,3 +387,22 @@ configured API key and incurs usage. Screenshots are saved in the ignored
 The server defaults to loopback with debug disabled. Add authentication and HTTPS
 before binding this API-key-backed service to a public interface. On Jetson, create
 a fresh Linux ARM virtual environment instead of copying the Windows `.venv`.
+
+## Gestenprüfung
+
+Auf dem Pi mit installierten `requirements-pi.txt`:
+
+```bash
+.venv/bin/python -m unittest tests.test_pinch_drag tests.test_gesture_service tests.test_https
+```
+
+Optionaler Browsertest mit dem systemweiten Chromium (keine OpenAI-Aufrufe):
+
+```bash
+.venv/bin/python -m pip install playwright
+.venv/bin/python -m tests.verify_gestures
+```
+
+Dieser Test prüft lokale Mesh-Downloads, Greifen/Drehen/Loslassen,
+Verbindungsabbrüche und unveränderten Zoom. Er schreibt Screenshots nach
+`verification/`. Die Kamerahardware wird dabei durch Gestenzustände ersetzt.

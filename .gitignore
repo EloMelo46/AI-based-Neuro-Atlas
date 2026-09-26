@@ -31,3 +31,6 @@ verification/
 /tests/verify_speech.py
 /main/prepare_meshes.py
 /requirements-preview.txt
+
+# Downloaded MediaPipe model (see README).
+/models/*.task

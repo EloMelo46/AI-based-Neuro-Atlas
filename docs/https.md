@@ -15,7 +15,7 @@ the Python process on the server.
 Install the additional Python dependencies from the project directory:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pip install -r requirements-https.txt
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
 Also install [Caddy](https://caddyserver.com/docs/install). On Windows, you can
@@ -24,14 +24,21 @@ extract `caddy.exe` from the official
 `.tools/caddy.exe`. Verify the download against the published checksums.
 The launcher also finds Caddy on `PATH`; use `--caddy PATH` to specify its location.
 
+For a browser on the Pi itself, prefer the local `http://localhost:5000`
+launcher from the README; HTTPS is only needed for other LAN clients. Set
+`NEURO_GESTURES=1` when starting this launcher to enable the Pi camera.
+
 On a Pi running Raspberry Pi OS 64-bit, use the Linux ARM64 version of Caddy and
 a Python environment created on the Pi. Do not copy the Windows `.venv`:
 
 ```bash
-.venv/bin/python -m pip install -r requirements-https.txt
+.venv/bin/python -m pip install -r requirements.txt
 # If you downloaded the executable manually into .tools:
 chmod +x .tools/caddy
 ```
+
+The launcher generates its Caddy configuration in `.local/https/Caddyfile`;
+a root-level Caddyfile is not required.
 
 ## Starting the server
 
@@ -176,7 +183,7 @@ available. HTTPS sessions use a separate cookie name with `Secure`, `HttpOnly`
 and `SameSite=Strict`. The proxy preserves the original host, and Waitress reports
 HTTPS as the request scheme so that the existing origin checks continue to work.
 
-Commit `Caddyfile`, `main/https_server.py`, `requirements-https.txt`, the
+Commit `Caddyfile`, `main/https_server.py`, `requirements.txt`, the
 documentation and tests. Keep `.local/`, `.tools/`, `.venv/`, `.env` files and
 generated verification output out of Git. These paths are covered by `.gitignore`;
 certificate and private-key extensions are also ignored as protection for copies

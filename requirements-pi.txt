@@ -1,0 +1,3 @@
+-r requirements.txt
+mediapipe==1.0.1
+# Picamera2/libcamera are installed with apt, exposed via --system-site-packages.

@@ -1,5 +1,5 @@
-﻿from pathlib import Path
-from flask import Flask, abort, render_template_string, request, send_from_directory
+from pathlib import Path
+from flask import Flask, Response, abort, render_template_string, request, send_from_directory
 import json
 import os
 import secrets
@@ -12,10 +12,12 @@ if __package__ in (None, ''):
     from main.brain_assistant import create_assistant
     from main.mesh_catalog import available_mesh_names
     from main.viewer_settings import FOCUS_CONTEXT_OPACITIES
+    from main.gesture_service import GestureService
 else:
     from .brain_assistant import create_assistant
     from .mesh_catalog import available_mesh_names
     from .viewer_settings import FOCUS_CONTEXT_OPACITIES
+    from .gesture_service import GestureService
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 MESH_DIR = PROJECT_ROOT / "export_preview"
@@ -24,6 +26,8 @@ app = Flask(__name__, static_folder=str(PROJECT_ROOT / "static"), static_url_pat
 app.secret_key = os.environ.get('BRAIN_VIEWER_SESSION_SECRET') or secrets.token_hex(32)
 app.config.update(MAX_CONTENT_LENGTH=11 * 1024 * 1024, SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Strict')
 app.register_blueprint(create_assistant(MESH_DIR))
+
+gestures = GestureService()
 
 HTML = r"""
 <!doctype html>
@@ -59,8 +63,8 @@ HTML = r"""
   <link rel="stylesheet" href="{{ url_for('static', filename='viewer.css') }}">
   <script type="importmap">
     {"imports": {
-      "three": "https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.module.js",
-      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.152.2/examples/jsm/"
+      "three": "/static/vendor/three/build/three.module.js",
+      "three/addons/": "/static/vendor/three/examples/jsm/"
     }}
   </script>
 </head>
@@ -72,6 +76,14 @@ HTML = r"""
   <h3>Gehirn – alle Regionen</h3>
   <p id="status" role="status">{{ count }} Regionen gefunden – 3D-Ansicht wird gestartet …</p>
   <button id="reset" disabled>Ansicht zurücksetzen</button>
+  <section aria-label="Gestensteuerung">
+    <label><input id="gesture-enabled" type="checkbox" checked> Mit Handgesten drehen</label>
+    <p id="gesture-status" class="hint" role="status">Gestenerkennung wird geprüft …</p>
+    <details id="gesture-preview">
+      <summary>Kameravorschau mit Handpunkten</summary>
+      <img id="gesture-image" alt="Kamerabild mit nummerierten Handpunkten und Greifanzeige" style="width:100%;max-width:640px">
+    </details>
+  </section>
   <p><label class="rotation-option"><input id="auto-rotate" type="checkbox" checked> Langsam drehen</label></p>
   <div class="viewer-settings">
     <div class="appearance-setting">
@@ -167,7 +179,7 @@ HTML = r"""
   import({{ url_for('static', filename='brain_viewer.js')|tojson }}).catch((error) => {
     document.getElementById('status').textContent = '3D-Ansicht konnte nicht gestartet werden.';
     const item = document.createElement('li');
-    item.textContent = 'Bitte Internetverbindung und WebGL prüfen: ' + error.message;
+    item.textContent = 'Bitte lokale Dateien und WebGL prüfen: ' + error.message;
     document.getElementById('errors').appendChild(item);
     console.error(error);
   });
@@ -208,6 +220,36 @@ def mesh(filename):
         abort(404)
     return send_from_directory(directory, filename)
 
-if __name__ == "__main__":
-    print(f"Serving surface files from: {MESH_DIR}")
-    app.run(host=os.environ.get('BRAIN_VIEWER_HOST', '127.0.0.1'), port=5000, debug=False)
+@app.get('/api/gestures/state')
+def gesture_state():
+    response = app.json.response(gestures.snapshot())
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+@app.get('/api/gestures/preview')
+def gesture_preview():
+    image = gestures.preview()
+    return Response(image or b'', status=200 if image else 204,
+                    mimetype='image/jpeg', headers={'Cache-Control': 'no-store'})
+
+
+def main(argv=None):
+    import argparse
+    from waitress import serve
+    parser = argparse.ArgumentParser(description='Lokaler Neuro Atlas auf dem Raspberry Pi')
+    parser.add_argument('--gestures', action='store_true', default=os.environ.get('NEURO_GESTURES') == '1')
+    parser.add_argument('--host', default=os.environ.get('BRAIN_VIEWER_HOST', '127.0.0.1'))
+    parser.add_argument('--port', type=int, default=5000)
+    args = parser.parse_args(argv)
+    if args.gestures:
+        gestures.start()
+    print(f'Neuro Atlas: http://{args.host}:{args.port}', flush=True)
+    try:
+        serve(app, host=args.host, port=args.port, threads=8)
+    finally:
+        gestures.stop()
+
+
+if __name__ == '__main__':
+    main()
