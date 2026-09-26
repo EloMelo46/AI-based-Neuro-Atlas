@@ -28,7 +28,7 @@ try:
         page.locator('#fullscreen-toggle').click()
         page.wait_for_function('!!document.fullscreenElement')
         assert page.locator('#fullscreen-toggle').get_attribute('aria-pressed') == 'true'
-        page.locator('#fullscreen-toggle').click()
+        page.keyboard.press('Escape')
         page.wait_for_function('!document.fullscreenElement')
         page.screenshot(path=str(OUTPUT_DIR / 'mobile-scene.png'))
         for panel, selector in [('regions','#info'),('assistant','#assistant-panel')]:
@@ -44,9 +44,9 @@ try:
         assert not page.locator('#info').is_visible()
         assert not page.locator('#assistant-panel').is_visible()
         assert not page.locator('.mobile-nav').is_visible()
-        assert page.locator('#fullscreen-toggle').inner_text() == '×'
+        assert not page.locator('#fullscreen-toggle').is_visible()
         assert page.locator('#scene').bounding_box()['height'] == page.viewport_size['height']
-        page.locator('#fullscreen-toggle').click()
+        page.keyboard.press('Escape')
         page.wait_for_function('!document.fullscreenElement')
         assert page.locator('#assistant-panel').is_visible()
         assert page.locator('#assistant-input').input_value() == 'Was macht der Hippocampus?'

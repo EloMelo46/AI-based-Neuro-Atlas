@@ -1,5 +1,3 @@
-import { tissueNoiseGLSL } from './tissue_appearance.js';
-
 // Stencil cross-sections share the surface geometry's GPU buffers.
 export function createCutCaps(THREE, scene, brain, planes) {
   brain.updateMatrixWorld(true);
@@ -53,25 +51,7 @@ export function createCutCaps(THREE, scene, brain, planes) {
         // Deterministic depth priority for coplanar, overlapping region caps.
         polygonOffset: true, polygonOffsetFactor: 0, polygonOffsetUnits: -(regionIndex + 1) * 2,
       });
-      // The cut has its own muted tissue palette; other appearances retain
-      // their surface colors. Share the style uniform so switching updates it.
-      material.onBeforeCompile = shader => {
-        shader.uniforms.cutTissue = surface.material.userData.appearance?.tissue ?? { value: 0 };
-        shader.vertexShader = shader.vertexShader
-          .replace('#include <common>', '#include <common>\nvarying vec3 vCutPosition;')
-          .replace('#include <begin_vertex>', `#include <begin_vertex>
-            vCutPosition = (modelMatrix * vec4(transformed, 1.0)).xyz;`);
-        shader.fragmentShader = shader.fragmentShader
-          .replace('#include <common>', `#include <common>
-            varying vec3 vCutPosition;
-            uniform float cutTissue;
-            ${tissueNoiseGLSL}`)
-          .replace('#include <color_fragment>', `#include <color_fragment>
-            if (cutTissue > 0.5) {
-              diffuseColor.rgb *= 0.94 + 0.12 * tissueNoise(vCutPosition * 1.3);
-            }`);
-      };
-      material.customProgramCacheKey = () => 'brain-cut-tissue-v1';
+      // The tissue palette is copied in update(); flat caps need no noise shader.
       const cap = new THREE.Mesh(capGeometry, material);
       cap.scale.setScalar(size);
       cap.renderOrder = order++;

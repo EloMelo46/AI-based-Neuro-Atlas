@@ -25,24 +25,13 @@ Then open http://localhost:5000. The 3D viewer requires WebGL. Three.js 0.152.2 
 locally without an internet connection. Only the optional OpenAI assistant
 requires internet access.
 
-For microphone access from a phone or Raspberry Pi over the LAN, use the
-optional HTTPS server with Caddy and Waitress:
-
-```powershell
-.venv/Scripts/python.exe -m pip install -r requirements.txt
-.venv/Scripts/python.exe -m main.https_server --host 192.168.1.213
-```
-
-Replace the example IP with the server's LAN address and install Caddy first.
-Open `https://<server-ip>:8443`. Each client must trust the generated public root
-certificate. See [HTTPS setup and device instructions](docs/https.md).
-The launcher starts and stops both services, keeps the Python backend on loopback,
-and stores private TLS state outside Git in `.local/https`. It does not change
-system trust stores. The original HTTP development command remains available.
+The supported display is Chromium on the same Raspberry Pi, connected to
+`http://localhost:5000`. Flask and Waitress serve the local application;
+there is no HTTPS proxy or certificate setup. Browser microphone access is
+available on localhost.
 
 **Vollbild** hides both side panels and the mobile navigation, keeping the
-conversation, microphone, playback and view state alive. Use the small **×**
-button or Escape to return to the previous layout.
+conversation, microphone, playback and view state alive. Press Escape to return to the previous layout; no exit button overlays the brain.
 
 ## Raspberry Pi 5: lokale Gestensteuerung
 
@@ -79,12 +68,36 @@ Start (ein Python-Prozess für Webserver und Kameraverarbeitung, **ohne sudo**):
 .venv/bin/python -m main.brain_viewer --gestures
 ```
 
-Dann in Chromium **http://localhost:5000** öffnen. Optional in einem zweiten
-Terminal als Wandanzeige: `chromium --kiosk http://localhost:5000`.
+In einem zweiten Terminal Chromium im Kioskmodus starten:
+
+```bash
+chromium --kiosk http://localhost:5000
+```
+
+Kioskmodus öffnet die Webseite ohne Browserleisten im Vollbild. Der Knopf
+**Vollbild** innerhalb der Webseite blendet zusätzlich die Bedienpanels aus.
+Mit `Alt+F4` das Chromium-Fenster schließen.
 `Strg+C` im Serverterminal beendet den Server und gibt die Kamera frei.
 Ohne `--gestures` funktioniert der Viewer weiterhin mit Maus/Touch und benötigt
 nur `requirements.txt`. Auch `python -m main.gesture_control` startet den
 integrierten Viewer mit Gesten. Keinen zweiten Kameraprozess parallel starten.
+
+**Desktop-Symbol:** Auf diesem Pi ist **Neuro Atlas** auf dem Desktop und im
+Anwendungsmenü installiert. Es startet `start_neuro_atlas.sh`, lädt eine
+vorhandene `.env` aus dem Projektordner und öffnet Chromium im Kioskmodus.
+Die `.env` darf beispielsweise `export OPENAI_API_KEY="..."` enthalten.
+Sie bleibt durch `.gitignore` ausgeschlossen.
+
+Ein bereits auf Port 5000 laufender Viewer wird wiederverwendet. Andernfalls
+startet das Symbol den Server mit `--gestures`. Ein selbst gestarteter Server
+wird beim Schließen des Kioskfensters mit `Alt+F4` beendet; ein zuvor manuell
+geöffneter Server läuft weiter. Mehrfaches Anklicken startet keine zweite Instanz.
+Das Kioskfenster verwendet ein eigenes Chromium-Profil in `.local/chromium-kiosk`;
+Mikrofonberechtigungen können dort beim ersten Mal erneut nötig sein.
+Startfehler stehen in `.local/desktop.log`.
+
+Die Vollbildansicht innerhalb der Webseite zeigt kein Kreuz mehr. **Escape**
+blendet die Bedienpanels wieder ein, Chromium bleibt dabei im Kioskmodus.
 
 **Bedienung:** Daumen (Landmark 4) und Zeigefinger (8) zusammenführen, dann die
 Hand seitlich oder nach oben/unten bewegen. Finger öffnen oder Hand aus dem
@@ -128,17 +141,8 @@ Für weniger Grafiklast auf dem Pi: **Mesh-Details: Optimiert**,
 **Bildauflösung: Sparsam** und **Langsam drehen** ausschalten, wenn das Modell
 ruhig stehen soll. Die optionale Kameravorschau benötigt zusätzliche CPU-Zeit.
 
-Die HTTPS-Variante bleibt für LAN-Clients verfügbar. Auf dem Pi zusätzlich
-`requirements-pi.txt` installieren und mit `NEURO_GESTURES=1` starten:
-
-```bash
-NEURO_GESTURES=1 .venv/bin/python -m main.https_server --host <LAN-IP-des-Pi>
-```
-
-Für den Browser auf demselben Pi genügt `http://localhost:5000`, auch für den
-Mikrofonzugriff. Kamera und deren Vorschau werden nicht an OpenAI gesendet.
-Wenn der Server bewusst im LAN bereitgestellt wird, ist auch die Gestenvorschau
-für dessen Clients erreichbar.
+Der Betrieb erfolgt lokal auf dem Pi über `http://localhost:5000`, auch für
+den Mikrofonzugriff. Kamera und deren Vorschau werden nicht an OpenAI gesendet.
 
 Eine früher installierte `/etc/udev/rules.d/70-gesture-uinput.rules` wird vom
 neuen Programm nicht verwendet. Sie kann entfernt werden, sofern kein anderes
@@ -150,7 +154,9 @@ Programm sie benötigt; diese Änderung entfernt keine Systemregeln automatisch.
 
 - **Lernen** keeps the original region colors and lighting.
 - **Natürlich** uses matte, muted rose/beige tissue with irregular tonal
-  variation and soft lighting, without specular reflections. Closed cuts show
+  variation and soft lighting, without specular reflections. Tonal variation is
+  computed once per geometry and interpolated during rendering; per-pixel
+  procedural noise and fine grain are removed. Closed cuts show
   cream-colored white matter and subtly differentiated gray matter/region tones;
   the legend follows the cut colors while cuts are active. The palette is an
   explanatory approximation, not measured tissue coloration. Gross-anatomy
@@ -178,8 +184,12 @@ values multiply the hologram's own transparency. Its cut caps are also transluce
 The new styles lazily cache softened vertex normals for lighting, without moving
 vertices or changing anatomical boundaries. The first switch can require a
 brief preparation; subsequent switches reuse those normals. No extra mesh
-download, texture assets or WebGL postprocessing passes are needed. The source
-geometry still limits how smooth and realistic the result can look.
+download, texture assets or WebGL postprocessing passes are needed. Natural also caches one extra float per vertex for tissue variation (four bytes).
+This adds a one-time CPU preparation and a small GPU buffer; the fragment shader
+only blends two colors instead of recalculating three 3D noise samples per pixel.
+Cut caps keep their tissue palette without a procedural grain shader. No new
+texture, mesh triangles or draw calls are added. The source geometry still limits
+how smooth and realistic the result can look.
 
 ## OpenAI assistant
 
@@ -331,10 +341,11 @@ open cuts. Caps share existing geometry buffers and do not create voxel data.
 
 ## Tests
 
-Run the appearance browser check with local Chrome and Python Playwright:
+Run the appearance browser check with local Chromium and Python Playwright:
 
-```powershell
-.venv/Scripts/python.exe -m tests.verify_appearance
+```bash
+.venv/bin/python -m pip install playwright
+.venv/bin/python -m tests.verify_appearance
 ```
 
 It checks all three styles, state preservation, assistant focus, cuts, rotation,
@@ -347,13 +358,6 @@ Run mocked unit tests without API calls:
 ```powershell
 .venv/Scripts/python.exe -m unittest tests.test_assistant -v
 ```
-
-After installing the HTTPS dependencies and Caddy, run
-`python -m unittest tests.test_https` and `python -m tests.verify_https`.
-These verify the real TLS chain, proxy Origin checks, secure session cookies,
-microphone upload, incremental text/audio delivery and the HTTP microphone hint.
-The browser check uses simulated audio and mocked OpenAI; no billable requests
-or system certificate installations are made.
 
 `verify_viewer`, `verify_highlight`, `verify_mobile`, `verify_non_realtime`, and
 `verify_microphone` are non-billable browser checks requiring Chrome and Python
@@ -393,7 +397,7 @@ a fresh Linux ARM virtual environment instead of copying the Windows `.venv`.
 Auf dem Pi mit installierten `requirements-pi.txt`:
 
 ```bash
-.venv/bin/python -m unittest tests.test_pinch_drag tests.test_gesture_service tests.test_https
+.venv/bin/python -m unittest tests.test_pinch_drag tests.test_gesture_service
 ```
 
 Optionaler Browsertest mit dem systemweiten Chromium (keine OpenAI-Aufrufe):

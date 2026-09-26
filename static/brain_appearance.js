@@ -1,4 +1,4 @@
-import { naturalCutColor, tissueNoiseGLSL } from './tissue_appearance.js';
+import { naturalCutColor, prepareTissueVariation } from './tissue_appearance.js';
 
 // Appearance changes reuse geometry and preserve anatomical selection and cuts.
 const STORAGE_KEY = 'neuroatlas.appearance';
@@ -119,6 +119,9 @@ export function createBrainAppearance(THREE, scene, regions, requestRender, onSt
 
   function createMaterial(region, clippingPlanes, geometry) {
     geometry.setAttribute('brainSoftNormal', geometry.getAttribute('normal'));
+    geometry.setAttribute('brainTissueVariation', new THREE.BufferAttribute(
+      new Float32Array(geometry.getAttribute('position').count).fill(0.5), 1));
+    if (current === 'natural') prepareTissueVariation(THREE, geometry);
     if (current !== 'learning') softenNormals(THREE, geometry);
     const material = new THREE.MeshPhongMaterial({
       side: THREE.DoubleSide, clippingPlanes,
@@ -152,10 +155,12 @@ export function createBrainAppearance(THREE, scene, regions, requestRender, onSt
           varying float vBrainDepth;
           uniform vec3 brainCenter;
           attribute vec3 brainSoftNormal;
+          attribute float brainTissueVariation;
+          varying float vBrainTissueVariation;
           uniform float brainSoftness;`)
         .replace('#include <beginnormal_vertex>', `#include <beginnormal_vertex>
           objectNormal = mix(objectNormal, brainSoftNormal, brainSoftness);`)
-        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvBrainPosition = position;')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvBrainPosition = position;\nvBrainTissueVariation = brainTissueVariation;')
         .replace('#include <project_vertex>', `#include <project_vertex>
           vBrainDepth = -mvPosition.z + (modelViewMatrix * vec4(brainCenter, 1.0)).z;`);
       shader.fragmentShader = shader.fragmentShader
@@ -168,14 +173,10 @@ export function createBrainAppearance(THREE, scene, regions, requestRender, onSt
           uniform float brainTissue;
           uniform float brainDigital;
           uniform float brainFocus;
-          ${tissueNoiseGLSL}`)
+          varying float vBrainTissueVariation;`)
         .replace('#include <color_fragment>', `#include <color_fragment>
           if (brainTissue > 0.5) {
-            float mottling = 0.65 * tissueNoise(vBrainPosition * 0.09)
-              + 0.35 * tissueNoise(vBrainPosition * 0.38);
-            float grain = tissueNoise(vBrainPosition * 2.4);
-            diffuseColor.rgb *= mix(vec3(0.87, 0.80, 0.77), vec3(1.11, 1.08, 1.04), mottling);
-            diffuseColor.rgb *= 0.97 + 0.06 * grain;
+            diffuseColor.rgb *= mix(vec3(0.87, 0.80, 0.77), vec3(1.11, 1.08, 1.04), vBrainTissueVariation);
           }`)
         .replace('#include <output_fragment>', `
           float brainFacing = clamp(abs(dot(normal, normalize(vViewPosition))), 0.0, 1.0);
@@ -201,7 +202,7 @@ export function createBrainAppearance(THREE, scene, regions, requestRender, onSt
           }
           #include <output_fragment>`);
     };
-    material.customProgramCacheKey = () => 'brain-appearance-v3';
+    material.customProgramCacheKey = () => 'brain-appearance-v4-baked-tissue';
     applyMaterial(material, region);
     return material;
   }
@@ -210,6 +211,7 @@ export function createBrainAppearance(THREE, scene, regions, requestRender, onSt
     region.object?.traverse(surface => {
       if (!surface.isMesh) return;
       if (current !== 'learning') softenNormals(THREE, surface.geometry);
+      if (current === 'natural') prepareTissueVariation(THREE, surface.geometry);
       applyMaterial(surface.material, region);
     });
     updateSwatch(region);

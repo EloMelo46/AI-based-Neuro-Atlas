@@ -340,7 +340,7 @@ def main():
             page.wait_for_function('!!document.fullscreenElement')
             assert not page.locator('#info').is_visible()
             assert not page.locator('#assistant-panel').is_visible()
-            assert page.locator('#fullscreen-toggle').inner_text() == '×'
+            assert not page.locator('#fullscreen-toggle').is_visible()
             assert page.locator('#fullscreen-toggle').get_attribute('aria-label') == 'Vollbild beenden'
             assert page.locator('.app-caption').count() == 0
             assert page.locator('#scene').bounding_box()['width'] == page.viewport_size['width']
@@ -357,7 +357,7 @@ def main():
             assert page.evaluate('JSON.stringify(cues[0].transitions) === JSON.stringify(cues[1].transitions)')
             assert page.evaluate('viewer.getState()') == persistent
             page.screenshot(path=str(output / 'fullscreen-glow.png'))
-            page.locator('#fullscreen-toggle').click()
+            page.keyboard.press('Escape')
             page.wait_for_function('!document.fullscreenElement')
             assert page.locator('#info').is_visible() and page.locator('#assistant-panel').is_visible()
             assert page.locator('#assistant-input').input_value() == 'Entwurf bleibt erhalten'
@@ -402,7 +402,7 @@ def main():
             page.locator('#fullscreen-toggle').click()
             page.wait_for_function('!!document.fullscreenElement')
             assert page.locator('#assistant-mic').get_attribute('aria-pressed') == 'true'
-            page.locator('#fullscreen-toggle').click()
+            page.keyboard.press('Escape')
             page.wait_for_function('!document.fullscreenElement')
             page.route('**/api/assistant/transcribe', lambda route: route.fulfill(json={'text': 'Aufnahme beendet'}))
             responses.append('Die Aufnahme ist beendet.')

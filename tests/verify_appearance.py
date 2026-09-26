@@ -1,5 +1,6 @@
 """Real WebGL appearance/state regression and screenshots; no paid API calls."""
 import logging
+import os
 import sys
 from pathlib import Path
 from threading import Thread
@@ -13,6 +14,7 @@ if __package__ in (None, ''):
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from main.brain_viewer import app
+from main.viewer_settings import FOCUS_CONTEXT_OPACITIES
 
 
 def main():
@@ -24,7 +26,7 @@ def main():
     try:
         with patch('main.brain_assistant._api_key', side_effect=AssertionError('Live API disabled')), \
                 sync_playwright() as playwright:
-            browser = playwright.chromium.launch(channel='chrome', headless=True,
+            browser = playwright.chromium.launch(executable_path=os.environ.get('CHROMIUM_PATH', '/usr/bin/chromium'), headless=True,
                                                  args=['--enable-unsafe-swiftshader'])
             page = browser.new_page(viewport={'width': 1600, 'height': 1000})
             page.set_default_timeout(120000)
@@ -91,6 +93,26 @@ def main():
                 captures.append(page.locator('#scene').screenshot(path=str(output / f'appearance-{style}.png')))
                 page.screenshot(path=str(output / f'appearance-{style}-panel.png'))
             assert len(set(captures)) == 3, 'Styles must visibly differ'
+            assert page.evaluate("""async () => {
+              const {prepareTissueVariation} = await import('/static/tissue_appearance.js');
+              const THREE = await import('three');
+              return view.regions.every(region => {
+                const geometry = surface(region.object.name.slice(0,-4)).geometry;
+                const attribute = geometry.getAttribute('brainTissueVariation');
+                if (!attribute || attribute.count !== geometry.getAttribute('position').count) return false;
+                if (!attribute.array.every(value => Number.isFinite(value) && value >= 0 && value <= 1)) return false;
+                prepareTissueVariation(THREE, geometry);
+                return geometry.getAttribute('brainTissueVariation') === attribute;
+              });
+            }""")
+            assert page.evaluate("""() => {
+              const gl = view.renderer.getContext();
+              return view.renderer.info.programs.every(program =>
+                gl.getAttachedShaders(program.program).every(shader =>
+                  gl.getShaderParameter(shader, gl.SHADER_TYPE) !== gl.FRAGMENT_SHADER
+                    || !gl.getShaderSource(shader).includes('tissueNoise')));
+            }"""), 'No per-fragment tissue noise should remain'
+            print('PASS: cached vertex variation is finite, reused, and replaces fragment noise.', flush=True)
             assert page.evaluate("materialColor('Left-Cerebral-Cortex')") == '123c79'
             print('PASS: three distinct rendered styles reuse geometry/draw calls and preserve view state.', flush=True)
 
@@ -100,7 +122,7 @@ def main():
             assert page.evaluate("materialColor('Left-Cerebral-Cortex')") == '123c79'
             focused = page.evaluate('viewer.getState()')
             assert focused['opacities']['Left-Hippocampus'] == 1
-            assert focused['opacities']['Left-Cerebral-Cortex'] == 0.4
+            assert focused['opacities']['Left-Cerebral-Cortex'] == FOCUS_CONTEXT_OPACITIES['digital']
             warm_pixels = page.evaluate("""() => {
               const {renderer, camera, brain} = view;
               renderer.render(brain.parent, camera);
@@ -173,7 +195,7 @@ def main():
             assert page.locator('#auto-rotate').is_checked()
             page.wait_for_timeout(200)
             assert page.evaluate('view.camera.position.toArray()') != before
-            print('PASS: 40% digital / 3% other context, manual opacity, tissue cut palette/legend, camera, rotation and narration.', flush=True)
+            print('PASS: configured focus opacity, manual opacity, tissue cut palette/legend, camera, rotation and narration.', flush=True)
 
             select('digital')
             load()

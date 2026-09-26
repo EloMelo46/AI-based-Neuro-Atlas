@@ -1,4 +1,4 @@
-# Local environments, downloaded tools and generated HTTPS state.
+# Local environments, downloaded tools and runtime state.
 .venv/
 .tools/
 .local/
@@ -30,7 +30,6 @@ verification/
 # Existing local-only mesh preparation and sample-dependent speech check.
 /tests/verify_speech.py
 /main/prepare_meshes.py
-/requirements-preview.txt
 
 # Downloaded MediaPipe model (see README).
 /models/*.task

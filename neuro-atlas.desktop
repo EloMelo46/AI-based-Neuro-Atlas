@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Neuro Atlas
+Comment=Local Brain-Viewer with gesture control and AI assistance
+Exec=/bin/bash "/home/elomelo/AI-based-Neuro-Atlas/start_neuro_atlas.sh"
+Path=/home/elomelo/AI-based-Neuro-Atlas
+Icon=/home/elomelo/AI-based-Neuro-Atlas/static/favicon.svg
+Terminal=false
+Categories=Education;
+StartupNotify=true

@@ -25,21 +25,35 @@ export function naturalCutColor(id) {
   return CUT_COLORS[name] ?? 0xc3aa9c;
 }
 
-// Continuous, object-space variation, without painted vessels or extra anatomy.
-export const tissueNoiseGLSL = `
-  float tissueHash(vec3 p) {
-    p = fract(p * 0.1031);
-    p += dot(p, p.yzx + 33.33);
-    return fract((p.x + p.y) * p.z);
+// Bake low-frequency tissue variation once per geometry, not per fragment/frame.
+const preparedGeometries = new WeakSet();
+const fract = value => value - Math.floor(value);
+const mix = (a, b, t) => a + (b - a) * t;
+function tissueHash(x, y, z) {
+  x = fract(x * 0.1031); y = fract(y * 0.1031); z = fract(z * 0.1031);
+  const d = x * (y + 33.33) + y * (z + 33.33) + z * (x + 33.33);
+  return fract((x + y + 2 * d) * (z + d));
+}
+function tissueNoise(x, y, z) {
+  const ix = Math.floor(x), iy = Math.floor(y), iz = Math.floor(z);
+  let fx = fract(x), fy = fract(y), fz = fract(z);
+  fx *= fx * (3 - 2 * fx); fy *= fy * (3 - 2 * fy); fz *= fz * (3 - 2 * fz);
+  return mix(
+    mix(mix(tissueHash(ix, iy, iz), tissueHash(ix + 1, iy, iz), fx),
+        mix(tissueHash(ix, iy + 1, iz), tissueHash(ix + 1, iy + 1, iz), fx), fy),
+    mix(mix(tissueHash(ix, iy, iz + 1), tissueHash(ix + 1, iy, iz + 1), fx),
+        mix(tissueHash(ix, iy + 1, iz + 1), tissueHash(ix + 1, iy + 1, iz + 1), fx), fy), fz);
+}
+
+export function prepareTissueVariation(THREE, geometry) {
+  if (preparedGeometries.has(geometry)) return;
+  const position = geometry.getAttribute('position');
+  const values = new Float32Array(position.count);
+  for (let i = 0; i < position.count; i++) {
+    const x = position.getX(i), y = position.getY(i), z = position.getZ(i);
+    values[i] = 0.65 * tissueNoise(x * 0.09, y * 0.09, z * 0.09)
+      + 0.35 * tissueNoise(x * 0.38, y * 0.38, z * 0.38);
   }
-  float tissueNoise(vec3 p) {
-    vec3 cell = floor(p);
-    vec3 f = fract(p);
-    f = f * f * (3.0 - 2.0 * f);
-    return mix(
-      mix(mix(tissueHash(cell), tissueHash(cell + vec3(1, 0, 0)), f.x),
-          mix(tissueHash(cell + vec3(0, 1, 0)), tissueHash(cell + vec3(1, 1, 0)), f.x), f.y),
-      mix(mix(tissueHash(cell + vec3(0, 0, 1)), tissueHash(cell + vec3(1, 0, 1)), f.x),
-          mix(tissueHash(cell + vec3(0, 1, 1)), tissueHash(cell + vec3(1, 1, 1)), f.x), f.y), f.z);
-  }
-`;
+  geometry.setAttribute('brainTissueVariation', new THREE.BufferAttribute(values, 1));
+  preparedGeometries.add(geometry);
+}
