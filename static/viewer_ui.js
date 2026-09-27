@@ -49,3 +49,24 @@ document.addEventListener('keydown', event => {
     navigation.querySelector('button').focus();
   }
 });
+
+// Hide only the page cursor; physical mouse and gesture input remain enabled.
+const CURSOR_IDLE_MS = 3000;
+let cursorIdleTimer = null;
+function showCursor() {
+  window.clearTimeout(cursorIdleTimer);
+  document.body.classList.remove('cursor-idle');
+  if (!document.hidden) {
+    cursorIdleTimer = window.setTimeout(() => document.body.classList.add('cursor-idle'), CURSOR_IDLE_MS);
+  }
+}
+for (const type of ['pointermove', 'pointerdown']) {
+  document.addEventListener(type, event => {
+    if (event.pointerType !== 'touch') showCursor();
+  }, { passive: true });
+}
+document.addEventListener('wheel', showCursor, { passive: true });
+document.addEventListener('visibilitychange', showCursor);
+window.addEventListener('focus', showCursor);
+window.addEventListener('pagehide', () => window.clearTimeout(cursorIdleTimer));
+showCursor();

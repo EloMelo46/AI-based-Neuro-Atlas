@@ -16,7 +16,7 @@ if __package__ in (None, ''):
 
 from main.brain_viewer import app, MESH_DIR
 from main.brain_assistant import (validate_action, validate_state, APIError,
-    generate_speech, transcribe_audio, tools_for, focus_result_error)
+    generate_speech, transcribe_audio, tools_for, focus_result_error, DEFAULT_MODEL)
 from main.realtime_assistant import create_realtime_secret
 from main.mesh_catalog import EXCLUDED_MESH_FILES, available_region_ids
 
@@ -165,7 +165,7 @@ class AssistantTests(unittest.TestCase):
     def test_non_realtime_config_and_page(self):
         with patch.dict(os.environ, {'OPENAI_API_KEY': 'test-only'}, clear=True):
             config = self.client.get('/api/assistant/config').get_json()
-        self.assertEqual(config['model'], 'gpt-5.6-luna')
+        self.assertEqual(config['model'], DEFAULT_MODEL)
         self.assertEqual(config['transcribe_model'], 'gpt-4o-mini-transcribe')
         self.assertEqual(config['speech_model'], 'gpt-4o-mini-tts')
         self.assertFalse(config['realtime'])
@@ -276,7 +276,7 @@ class AssistantTests(unittest.TestCase):
             tool_output = next(i for i in payload['input'] if i.get('type') == 'function_call_output')
             self.assertTrue(json.loads(tool_output['output'])['ok'])
             self.assertFalse(payload['store'])
-            self.assertEqual(payload['model'], 'gpt-5.6-luna')
+            self.assertEqual(payload['model'], DEFAULT_MODEL)
             self.assertEqual(payload['reasoning'], {'effort': 'low'})
             self.assertEqual(payload['text'], {'verbosity': 'medium'})
             self.assertEqual(payload['max_output_tokens'], 1600)

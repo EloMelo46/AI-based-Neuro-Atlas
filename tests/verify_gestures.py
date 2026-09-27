@@ -34,7 +34,7 @@ def main():
             page.route('**/*', guard)
             source = (ROOT / 'static/brain_viewer.js').read_text()
             page.route('**/static/brain_viewer.js', lambda route: route.fulfill(
-                body=source + '\nexport { camera, controls, gestureRotationResumeTimer };', content_type='text/javascript'))
+                body=source + '\nexport { camera, controls };', content_type='text/javascript'))
             page.goto(f'http://127.0.0.1:{server.server_port}/')
             page.locator('#auto-rotate').uncheck()
             page.wait_for_function("!document.getElementById('reset').disabled", timeout=120000)
@@ -49,6 +49,17 @@ def main():
             output.mkdir(exist_ok=True)
             page.screenshot(path=str(output / 'gestures-ready.png'))
             print('PASS: viewer, 38 meshes and gesture controls load entirely locally.', flush=True)
+            # The anterior RAS side (+Y) maps to world -Z; retain the oblique angle.
+            def assert_front_view():
+                assert page.evaluate('view.camera.position.z < view.controls.target.z')
+                assert page.evaluate('view.camera.position.x > view.controls.target.x')
+                assert page.evaluate('view.camera.position.y > view.controls.target.y')
+            assert_front_view()
+            page.locator('#reset').click()
+            assert_front_view()
+            page.evaluate("view.assistantViewer.execute({name:'reset_view', arguments:{}})")
+            assert_front_view()
+            print('PASS: initial view, reset button and assistant reset face the anterior side obliquely.', flush=True)
             before = page.evaluate('pose()')
             gestures.publish(None, True)
             page.wait_for_function("document.getElementById('gesture-status').textContent.includes('Sparmodus')")
@@ -61,32 +72,27 @@ def main():
             page.wait_for_function('(old) => JSON.stringify(pose()) !== JSON.stringify(old)', arg=before)
             gestures.publish(('grab_end', 0, 0), False)
             page.wait_for_function("document.getElementById('gesture-status').textContent.includes('Bereit')")
+            assert page.locator('#auto-rotate').is_checked()
             released = page.evaluate('pose()')
-            page.wait_for_timeout(200)
-            assert page.evaluate('pose()') == released
+            page.wait_for_function('(old) => JSON.stringify(pose()) !== JSON.stringify(old)', arg=released, timeout=2000)
             assert page.evaluate('view.controls.target.toArray()') == target
             assert abs(page.evaluate('view.camera.position.distanceTo(view.controls.target)') - radius) < 1e-6
             assert page.evaluate('view.controls.enabled')
-            assert not page.locator('#auto-rotate').is_checked()
             page.screenshot(path=str(output / 'gestures-rotated.png'))
-            print('PASS: real HTTP state changes rotate the camera; release preserves pose, target and zoom.', flush=True)
-            # A second grab must cancel the release countdown; the next release
-            # starts a fresh ten-second pause before automatic rotation resumes.
-            assert page.evaluate('view.gestureRotationResumeTimer !== null')
+            print('PASS: release immediately resumes rotation, preserving target and zoom.', flush=True)
+            # Re-grab pauses immediately, the next release resumes without a timer.
             gestures.publish(('grab_start', 0, 0), False)
             page.wait_for_function("document.getElementById('gesture-status').textContent.includes('Gegriffen')")
-            assert page.evaluate('view.gestureRotationResumeTimer === null')
             assert not page.locator('#auto-rotate').is_checked()
+            grabbed = page.evaluate('pose()')
+            page.wait_for_timeout(200)
+            assert page.evaluate('pose()') == grabbed
             gestures.publish(('grab_end', 0, 0), False)
-            page.wait_for_function('view.gestureRotationResumeTimer !== null')
-            page.wait_for_timeout(1000)
-            assert not page.locator('#auto-rotate').is_checked()
-            assert page.evaluate('pose()') == released
-            page.wait_for_function("document.getElementById('auto-rotate').checked", timeout=12000)
-            page.wait_for_function('(old) => JSON.stringify(pose()) !== JSON.stringify(old)', arg=released)
+            page.wait_for_function("document.getElementById('gesture-status').textContent.includes('Bereit')")
+            assert page.locator('#auto-rotate').is_checked()
+            page.wait_for_function('(old) => JSON.stringify(pose()) !== JSON.stringify(old)', arg=grabbed, timeout=2000)
             page.locator('#auto-rotate').uncheck()
-            assert page.evaluate('view.gestureRotationResumeTimer === null')
-            print('PASS: re-grab cancels countdown; rotation resumes ten seconds after release.', flush=True)
+            print('PASS: re-grab pauses rotation; release resumes immediately; manual rotation toggle remains usable.', flush=True)
             # Test receiver lifecycle without polling/network timing dependencies.
             page.evaluate("""async () => {
                 const { createGestureReceiver, rotateView } = await import('/static/gesture_control.js');

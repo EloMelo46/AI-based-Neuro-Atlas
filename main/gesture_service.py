@@ -14,6 +14,8 @@ class GestureService:
         self.error = None
         self.holding = False
         self.grab_id = 0
+        self.listening = False
+        self.listen_id = 0
         self.x = self.y = 0.0
         self.updated = None
         self.idle = True
@@ -36,19 +38,24 @@ class GestureService:
                 self.status = 'error'
                 self.error = str(error)
                 self.holding = False
+                self.listening = False
             print(f'Gestenerkennung: {error}', flush=True)
         finally:
             with self.lock:
                 self.holding = False
+                self.listening = False
                 self.jpeg = None
                 if self.status != 'error':
                     self.status = 'stopped'
 
-    def publish(self, event, idle):
+    def publish(self, event, idle, listening=False):
         with self.lock:
             self.updated = time.monotonic()
             self.status = 'running'
             self.idle = idle
+            if listening and not self.listening:
+                self.listen_id += 1
+            self.listening = listening
             if event:
                 action, dx, dy = event
                 if action == 'grab_start':
@@ -68,7 +75,8 @@ class GestureService:
             connected = self.status == 'running' and fresh
             return dict(session=self.session, status=self.status, error=self.error,
                         connected=connected, holding=self.holding and connected,
-                        grab_id=self.grab_id, x=self.x, y=self.y, idle=self.idle)
+                        grab_id=self.grab_id, x=self.x, y=self.y, idle=self.idle,
+                        listening=self.listening and connected, listen_id=self.listen_id)
 
     def wants_preview(self):
         with self.lock:
@@ -89,5 +97,6 @@ class GestureService:
             self.thread.join(timeout=5)
         with self.lock:
             self.holding = False
+            self.listening = False
             if self.status != 'error':
                 self.status = 'stopped'

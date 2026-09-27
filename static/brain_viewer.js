@@ -64,12 +64,6 @@ sceneHost.appendChild(renderer.domElement);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 const rotationToggle = document.getElementById('auto-rotate');
-const GESTURE_ROTATION_RESUME_MS = 10_000;
-let gestureRotationResumeTimer = null;
-function cancelGestureRotationResume() {
-  window.clearTimeout(gestureRotationResumeTimer);
-  gestureRotationResumeTimer = null;
-}
 let resumeRotationAfterCuts = false;
 let interacting = false;
 let lastFrameTime = null;
@@ -77,7 +71,6 @@ const rotationOffset = new THREE.Vector3();
 controls.addEventListener('start', () => { interacting = true; });
 controls.addEventListener('end', () => { interacting = false; lastFrameTime = null; requestRender(); });
 rotationToggle.addEventListener('change', () => {
-  cancelGestureRotationResume();
   // A manual choice supersedes a rotation pause made for a cut view.
   resumeRotationAfterCuts = false;
   lastFrameTime = null;
@@ -250,7 +243,8 @@ function initializeCuts() {
   document.getElementById('reset-cuts').disabled = false;
 }
 
-function fitCamera(targetBounds = null, direction = new THREE.Vector3(0.5, 0.3, 1), margin = 0.7) {
+// RAS anterior (+Y) becomes world -Z after the brain rotation: look from front-right.
+function fitCamera(targetBounds = null, direction = new THREE.Vector3(0.5, 0.3, -1), margin = 0.6) {
   const bounds = targetBounds instanceof THREE.Box3 ? targetBounds : new THREE.Box3().setFromObject(brain);
   if (bounds.isEmpty()) return;
   const sphere = bounds.getBoundingSphere(new THREE.Sphere());
@@ -265,6 +259,9 @@ function fitCamera(targetBounds = null, direction = new THREE.Vector3(0.5, 0.3, 
   controls.update();
   controls.target.copy(sphere.center);
   camera.position.copy(sphere.center).add(direction.clone().normalize().multiplyScalar(distance));
+  const offset = radius * 0.05;
+  camera.position.y -= offset;
+  controls.target.y -= offset;
   camera.near = radius / 1000;
   camera.far = distance + radius * 100;
   camera.updateProjectionMatrix();
@@ -427,7 +424,7 @@ export const assistantViewer = {
   },
   execute(action) {
     const args = action.arguments;
-    const allowed = ['highlight_regions', 'set_visibility', 'set_opacity', 'isolate_regions', 'set_cut', 'reset_view'];
+    const allowed = ['highlight_regions', 'set_visibility', 'set_opacity', 'isolate_regions', 'set_cut', 'set_appearance', 'reset_view'];
     if (!allowed.includes(action.name) || !args || typeof args !== 'object') throw new Error('Unbekannte Vieweraktion.');
     const selected = (args.region_ids ?? []).map(id => {
       const region = regionMap.get(id);
@@ -467,6 +464,9 @@ export const assistantViewer = {
       // Old cuts must not keep the newly requested anatomy out of view.
       document.getElementById('reset-cuts').click();
       // Preserve the camera, zoom and pan; clearing cuts resumes their paused rotation.
+    } else if (action.name === 'set_appearance') {
+      if (!['learning', 'natural', 'digital'].includes(args.appearance)) throw new Error('Unbekannte Darstellung.');
+      appearance.setStyle(args.appearance);
     } else if (action.name === 'set_cut') {
       const index = cutAxes.indexOf(args.axis);
       if (index < 0 || !Number.isFinite(args.min) || !Number.isFinite(args.max) || args.min < 0 || args.max > 100 || args.min > args.max) throw new Error('Ungültige Schnittgrenzen.');
@@ -510,6 +510,7 @@ export const assistantViewer = {
     const focusLabel = `Zielareale hervorgehoben (Umgebung ${Math.round(appearance.getContextOpacity() * 100)} %)`;
     const labels = { highlight_regions: action.arguments.region_ids?.length ? focusLabel : 'Auswahl aufgehoben', set_visibility: 'Sichtbarkeit geändert',
       set_opacity: `Deckkraft: ${Math.round(action.arguments.opacity * 100)} %`,
+      set_appearance: `Darstellung: ${{ learning: 'Lernansicht', natural: 'Natürlich', digital: 'Digital' }[action.arguments.appearance]}`,
       isolate_regions: focusLabel, set_cut: 'Schnitt eingestellt', reset_view: 'Ansicht zurückgesetzt' };
     return labels[action.name] + (action.arguments.region_ids?.length ? ': ' + action.arguments.region_ids.join(', ') : '');
   },
@@ -519,21 +520,15 @@ if (loaded) attachViewer(assistantViewer);
 if (loaded) attachGestureControl({
   camera, controls, requestRender,
   onGrab() {
-    // A new grab cancels the countdown from the previous release.
-    cancelGestureRotationResume();
     rotationToggle.checked = false;
     resumeRotationAfterCuts = false;
     lastFrameTime = null;
     requestRender();
   },
   onRelease() {
-    cancelGestureRotationResume();
-    gestureRotationResumeTimer = window.setTimeout(() => {
-      gestureRotationResumeTimer = null;
-      rotationToggle.checked = true;
-      resumeRotationAfterCuts = false;
-      lastFrameTime = null;
-      requestRender();
-    }, GESTURE_ROTATION_RESUME_MS);
+    rotationToggle.checked = true;
+    resumeRotationAfterCuts = false;
+    lastFrameTime = null;
+    requestRender();
   },
 });

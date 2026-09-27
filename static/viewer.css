@@ -95,3 +95,20 @@ body.viewer-fullscreen .mobile-nav,
 body.viewer-fullscreen .app-header > div:first-child { display: none; }
 body.viewer-fullscreen #scene { inset: 0; }
 body.viewer-fullscreen .app-header { display: none; }
+
+/* Alpha-based glow follows the brain silhouette, including in fullscreen.
+   Only active during real microphone capture; no extra 3D render pass. */
+body.assistant-listening #scene canvas {
+  animation: listening-shimmer 3.6s ease-in-out infinite;
+  filter: drop-shadow(0 0 24px #ffffff90) drop-shadow(0 0 90px #ffffff60);
+}
+@keyframes listening-shimmer {
+  0%, 100% { filter: drop-shadow(0 0 24px #ffffff80) drop-shadow(0 0 90px #ffffff50); }
+  50% { filter: drop-shadow(0 0 24px #ffffffa0) drop-shadow(0 0 90px #ffffff70); }
+}
+@media (prefers-reduced-motion: reduce) {
+  body.assistant-listening #scene canvas { animation: none; }
+}
+
+/* Override pointer/grab/text cursors too, including controls in fullscreen. */
+body.cursor-idle, body.cursor-idle * { cursor: none !important; }

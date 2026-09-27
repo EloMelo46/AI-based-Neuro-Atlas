@@ -52,6 +52,46 @@ export function createGestureReceiver({ start, move, end }) {
   };
 }
 
+// Require a neutral pose after page load/reconnect; never replay an old hold.
+export function createListenReceiver({ start, end, cancel }) {
+  let session = null;
+  let armed = false;
+  let active = false;
+  let listenId = null;
+  return {
+    reset() {
+      if (active) cancel();
+      active = false;
+      armed = false;
+      session = null;
+      listenId = null;
+    },
+    accept(state) {
+      if (!state.connected) { this.reset(); return; }
+      if (session !== state.session) {
+        this.reset();
+        session = state.session;
+        armed = !state.listening;
+        return;
+      }
+      if (active && state.listening && state.listen_id !== listenId) {
+        // A release and a new hold happened between polls: discard the old audio.
+        cancel();
+        active = false;
+      }
+      if (!state.listening || state.holding) {
+        if (active) end();
+        active = false;
+        armed = true;
+      } else if (armed && !active) {
+        active = true;
+        listenId = state.listen_id;
+        start();
+      }
+    },
+  };
+}
+
 export function attachGestureControl({ camera, controls, requestRender, onGrab, onRelease }) {
   const label = document.getElementById('gesture-status');
   const toggle = document.getElementById('gesture-enabled');
@@ -76,27 +116,34 @@ export function attachGestureControl({ camera, controls, requestRender, onGrab, 
       requestRender();
     },
   });
-  toggle.addEventListener('change', () => receiver.reset());
-  document.addEventListener('visibilitychange', () => receiver.reset());
-  window.addEventListener('pagehide', () => receiver.reset());
+  const notifyListen = (active, cancel = false) => document.dispatchEvent(
+    new CustomEvent('gesture-listen', { detail: { active, cancel } }));
+  const listenReceiver = createListenReceiver({
+    start: () => notifyListen(true), end: () => notifyListen(false),
+    cancel: () => notifyListen(false, true),
+  });
+  function reset() { receiver.reset(); listenReceiver.reset(); }
+  toggle.addEventListener('change', reset);
+  document.addEventListener('visibilitychange', reset);
+  window.addEventListener('pagehide', reset);
 
   async function poll() {
     let delay = 1000;
     try {
-      if (document.hidden) { receiver.reset(); return; }
+      if (document.hidden) { reset(); return; }
       const response = await fetch('/api/gestures/state', { cache: 'no-store', signal: AbortSignal.timeout(1500) });
       if (!response.ok) throw new Error('Gestenverbindung unterbrochen');
       const state = await response.json();
-      if (toggle.checked) receiver.accept(state);
-      else receiver.reset();
+      if (toggle.checked && !document.hidden) { receiver.accept(state); listenReceiver.accept(state); }
+      else reset();
       if (state.status === 'error') label.textContent = `Kamera nicht verfügbar: ${state.error}`;
       else if (state.status === 'disabled') label.textContent = 'Gestenerkennung ist beim Serverstart ausgeschaltet.';
       else if (!state.connected) label.textContent = 'Warte auf die Kamera …';
       else if (!toggle.checked) label.textContent = 'Gestensteuerung für diese Ansicht pausiert.';
-      else label.textContent = state.holding ? 'Gegriffen · Hand bewegen zum Drehen' : state.idle ? 'Bereit · Sparmodus (3 Bilder/s)' : 'Bereit · Daumen und Zeigefinger zusammenführen';
+      else label.textContent = state.listening ? 'Sprechgeste aktiv · Finger senken zum Senden' : state.holding ? 'Gegriffen · Hand bewegen zum Drehen' : state.idle ? 'Bereit · Sparmodus (3 Bilder/s)' : 'Bereit · Greifen zum Drehen / Zeigefinger hoch zum Sprechen';
       delay = state.connected ? (state.idle ? 333 : 50) : 1000;
     } catch (error) {
-      receiver.reset();
+      reset();
       label.textContent = 'Verbindung zur Gestenerkennung unterbrochen.';
     } finally { window.setTimeout(poll, delay); }
   }

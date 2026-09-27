@@ -99,18 +99,33 @@ Startfehler stehen in `.local/desktop.log`.
 Die Vollbildansicht innerhalb der Webseite zeigt kein Kreuz mehr. **Escape**
 blendet die Bedienpanels wieder ein, Chromium bleibt dabei im Kioskmodus.
 
+**Sprechen per Handgeste:** Nur den Zeigefinger nach oben strecken, Mittel-,
+Ring- und kleinen Finger einklappen und die Pose mindestens **0,5 Sekunden**
+halten. Sobald ein feiner weißer Schimmer ums Gehirn erscheint, nimmt das
+Mikrofon auf. Finger senken (oder Hand aus dem Bild nehmen) beendet die Aufnahme
+und sendet sie an den Assistenten. Eine offene Hand und die Greifgeste starten
+keine Aufnahme. Die Schwelle steht in `main/gesture_control.py` unter
+`LISTEN_HOLD_SECONDS`.
+
+Der Browser benötigt einmalig die Mikrofonberechtigung für localhost und der
+Assistent muss bereit sein. Während einer laufenden Anfrage wird eine neue
+Sprechgeste ignoriert; danach Finger senken und erneut heben. Nach 60 Sekunden
+endet die Aufnahme automatisch. Bei unterbrochener Gestenverbindung, pausierten
+Gesten oder verborgenem Browserfenster wird eine gestengesteuerte Aufnahme
+verworfen. Nach dem Laden/Wiederverbinden zuerst den Finger senken. Der Schimmer
+zeigt die tatsächliche Aufnahme an, auch bei manuellem Mikrofonstart; beim
+Anfragen der Berechtigung oder während der Verarbeitung bleibt er aus.
+
 **Bedienung:** Daumen (Landmark 4) und Zeigefinger (8) zusammenführen, dann die
 Hand seitlich oder nach oben/unten bewegen. Finger öffnen oder Hand aus dem
-Bild nehmen beendet das Drehen. Offene Hände verändern die Ansicht nicht.
+Bild nehmen beendet das manuelle Ziehen. Offene Hände lösen keine Greifgeste aus.
 Greifen pausiert **Langsam drehen**. Nach dem Loslassen (auch bei Handverlust)
-bleibt die Ansicht 10 Sekunden stehen, danach startet die automatische Drehung
-wieder. Erneutes Greifen bricht den Timer ab; erst nach dem nächsten Loslassen
-beginnen erneut 10 Sekunden. Eine manuelle Änderung von **Langsam drehen**
-hebt den laufenden Timer auf. Zoom, Fokus und anatomische Schnittachsen bleiben
-erhalten. Die Wartezeit steht als `GESTURE_ROTATION_RESUME_MS = 10_000` in
-`static/brain_viewer.js`.
+läuft die automatische Drehung sofort weiter. Erneutes Greifen pausiert sie
+während der Handbewegung. **Langsam drehen** lässt sich weiterhin manuell
+umschalten. Beim Start und beim Zurücksetzen zeigt die Kamera das Gehirn
+schräg von vorne. Zoom und Höhenversatz der Ausgangsansicht bleiben erhalten.
 
-Im Seitenpanel zeigt **Mit Handgesten drehen** den Zustand und erlaubt es, die
+Im Seitenpanel zeigt **Handgesten aktiv** den Zustand und erlaubt es, die
 Gesten für diese Browseransicht zu pausieren. **Kameravorschau mit Handpunkten**
 zeigt das gespiegelte Bild, die Nummern, die Verbindung 4–8 und den Zugpfeil.
 Die Vorschau wird nur auf Anfrage aufbereitet; geschlossen spart sie CPU.
@@ -149,6 +164,17 @@ neuen Programm nicht verwendet. Sie kann entfernt werden, sofern kein anderes
 Programm sie benötigt; diese Änderung entfernt keine Systemregeln automatisch.
 
 ## Appearance
+
+Der Mauszeiger wird nach **3 Sekunden** ohne Bewegung ausgeblendet und erscheint
+bei Mausbewegung, Klick oder Scrollen wieder. Dies gilt innerhalb der Webseite,
+auch im Kiosk- und Vollbildmodus. Die Dauer steht unter `CURSOR_IDLE_MS` in
+`static/viewer_ui.js`.
+
+Der Assistent kann das Design auch per Sprache oder Text mit `set_appearance`
+wechseln, beispielsweise „Wechsle zum natürlichen Design“, „Zeige das Gehirn
+als digitales Hologramm“ oder „Zurück zur bunten Lernansicht“. Die Auswahl im
+Menü und die gespeicherte Einstellung werden mit aktualisiert. Kamera, Zoom,
+Schnitte und Auswahl bleiben erhalten; die Kontext-Deckkraft folgt dem Design.
 
 **Darstellung** in the existing panel switches between three styles:
 

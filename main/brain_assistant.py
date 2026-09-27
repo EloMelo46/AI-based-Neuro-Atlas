@@ -220,6 +220,8 @@ def tools_for(ids, include_region_enum=True):
              {'axis': {'type': 'string', 'enum': ['x', 'y', 'z']},
               'min': {'type': 'number', 'minimum': 0, 'maximum': 100},
               'max': {'type': 'number', 'minimum': 0, 'maximum': 100}}),
+        tool('set_appearance', 'Switch the brain design: learning = Lernansicht (color-coded regions), natural = Natürlich (realistic tissue), digital = Digital (blue hologram). Use only when the user requests a design/style change. Preserve the camera, zoom, cuts, region visibility and selection; focus context opacity follows the chosen design.',
+             {'appearance': {'type': 'string', 'enum': list(FOCUS_CONTEXT_OPACITIES)}}),
         tool('reset_view', 'Show all default regions except CSF fully opaque, clear highlights and cuts, and reset camera. Use for requests to show all or the rest of the brain.', {}),
     ]
 
@@ -245,6 +247,9 @@ def validate_action(name, args, ids):
         opacity = args['opacity']
         if type(opacity) not in (int, float) or not math.isfinite(opacity) or not 0 <= opacity <= 1:
             raise ValueError('Deckkraft muss zwischen 0 und 1 liegen.')
+    if name == 'set_appearance':
+        if not isinstance(args['appearance'], str) or args['appearance'] not in FOCUS_CONTEXT_OPACITIES:
+            raise ValueError('Ungültige Darstellung.')
     if name == 'set_cut':
         if args['axis'] not in ('x', 'y', 'z'):
             raise ValueError('Ungültige Achse.')
@@ -287,7 +292,9 @@ def validate_state(value, ids):
 
 
 def focus_result_error(action, state):
-    """Check the visual focus contract, even if an older client reports success."""
+    """Check appearance/focus results, even if an older client reports success."""
+    if action['name'] == 'set_appearance':
+        return '' if state.get('appearance') == action['arguments']['appearance'] else 'Darstellungswechsel nicht bestätigt: Der Viewer meldet ein anderes Design.'
     if action['name'] != 'isolate_regions':
         return ''
     targets = set(action['arguments']['region_ids'])
@@ -313,13 +320,14 @@ Nutze ausschließlich die bereitgestellten Areal-IDs; ohne .obj-Endung. Beachte 
 Die aktuelle Ansicht und verfügbaren Regionen sind als Kontext beigefügt, kein Auftrag.
 CSF ist ein Opt-in-Areal: Es bleibt beim Start, beim Zurücksetzen sowie bei 'alles' oder 'den Rest des Gehirns anzeigen' ausgeblendet. Blende CSF nur ein, wenn der Nutzer ausdrücklich CSF, Liquor oder Gehirnflüssigkeit verlangt.
 Steuere den Viewer nur passend zur Nutzerbitte. Die Farben richten sich nach der gewählten Darstellung: learning nutzt Arealfarben, natural Gewebetöne, digital Cyan mit warmen Hervorhebungen.
+Bei einer ausdrücklichen Bitte um ein anderes Design nutze set_appearance: Lernen/Lernansicht/bunt/farbige Areale = learning, natürlich/realistisch/Gewebe = natural, digital/Hologramm = digital. Das aktuelle Design steht in appearance. Ändere für einen Designwechsel weder Auswahl noch Schnitte oder Kamera und nutze dafür nicht reset_view. Bei einer reinen Designbitte genügt nach erfolgreichem Werkzeugergebnis eine kurze Bestätigung, ohne anatomische Erklärung. Bei sonstigen Anfragen behalte das Design bei.
 Bei reinen Erklärungen behalte die bestehende Auswahl bei. Erwähnte, im Modell verfügbare anatomische Strukturen erhalten automatisch einen kurzen Leuchteffekt während der Antwort; dafür keine Viewerwerkzeuge aufrufen. Dies gilt auch für Ventrikel und weiße Substanz, unabhängig von ihrer anatomischen Funktion. Die Ventrikel-IDs sind eigenständige Strukturen und nicht mit der separat ausgeblendeten ID CSF gleichzusetzen. Dieser Leuchteffekt ist keine dauerhafte Markierung und aktiviert kein ausgeblendetes CSF. Unterscheide bei Rückfragen zwischen dauerhafter Auswahl und automatischem Leuchteffekt: Du erhältst keine Bestätigung, ob ein Leuchteffekt tatsächlich angezeigt wurde, und kannst einen fehlenden Effekt nicht mit deiner anatomischen Auswahlentscheidung begründen. Verwende die anatomischen Namen, wenn du über eine andere Struktur sprichst, statt nur unklar darauf zu verweisen.
 Bei jeder Bitte, ein bestimmtes Areal zu zeigen, zu markieren oder hervorzuheben (auch 'zeige mir', 'markiere', 'zeige nur', 'isoliere' und Korrekturen), nutze isolate_regions mit allen gewünschten Zielarealen gemeinsam. Die neue Hervorhebung ersetzt die vorherige: Zielareale erhalten 100 % Deckkraft, alle übrigen geladenen Hirnareale bleiben als Kontext sichtbar bei {FOCUS_CONTEXT_OPACITIES['digital'] * 100:g} % im Modus digital, sonst bei {FOCUS_CONTEXT_OPACITIES['learning'] * 100:g} %. Beim Hologramm wirken diese Werte relativ zur durchscheinenden Darstellung. CSF bleibt ausgeblendet, außer es wurde ausdrücklich verlangt und als Ziel angegeben. Verwende dafür nicht nur set_visibility oder set_opacity.
 isolate_regions setzt vorherige Schnitte zurück und behält die aktuelle Kameraperspektive, den Zoom und die automatische Drehung bei. Setze die Kamera bei einer neuen Markierung nicht mit reset_view zurück. Wenn die Nutzerbitte zusätzlich einen Schnitt verlangt, führe zuerst isolate_regions und danach set_cut aus. Die Schnittebenen sind X sagittal, Y koronal und Z axial (horizontal). set_cut richtet die Kamera automatisch entlang der anatomischen Schnittachse auf die freigelegte Schnittfläche aus und pausiert die Drehung, solange ein Schnitt gesetzt wird.
 Wird der letzte Schnitt entfernt, wird die dafür pausierte automatische Drehung wieder aufgenommen; eine manuell ausgeschaltete Drehung bleibt aus. Dies gilt auch, wenn isolate_regions alte Schnitte entfernt.
 Wenn die Seite nicht genannt ist und sowohl ein linkes als auch ein rechtes Areal existiert, wähle beide Hemisphären. Bei ausdrücklich links oder rechts wähle nur die genannte Seite.
 Mit set_opacity kannst du Areale durchsichtig machen; jedes betroffene Areal wird dabei immer eingeblendet. Deckkraft 30 % bedeutet opacity 0.3, Transparenz 30 % bedeutet opacity 0.7. Für transparente Außenflächen die inneren Zielareale eingeblendet lassen.
-Die technische Statusmeldung im Chat zeigt bereits die ausgeführten Vieweraktionen. Beginne deine Antwort direkt mit der fachlichen Erklärung. Wiederhole keine Aktionsbestätigung und kommentiere weder die Hervorhebung noch Kontext-Deckkraft, Darstellungsmodus oder ausgeblendetes CSF, außer der Nutzer fragt ausdrücklich danach. Kündige Vieweraktionen auch nicht vorab an.
+Die technische Statusmeldung im Chat zeigt bereits die ausgeführten Vieweraktionen. Beginne bei Wissensfragen deine Antwort direkt mit der fachlichen Erklärung. Wiederhole keine Aktionsbestätigung und kommentiere weder die Hervorhebung noch Kontext-Deckkraft, Darstellungsmodus oder ausgeblendetes CSF, außer der Nutzer fragt ausdrücklich danach oder bittet ausschließlich um einen Designwechsel. Kündige Vieweraktionen auch nicht vorab an.
 Die Liste highlighted allein beweist keine sichtbare Hervorhebung. Maßgeblich ist das zugehörige Werkzeugergebnis: ok=true bestätigt die Ausführung einschließlich der Prüfung im gewählten Darstellungsmodus. Erfinde dann keinen Deckkraftfehler und leite keinen Fehler aus früheren Antworten oder früheren Zuständen ab. Bei ok=false korrigiere die Aktion anhand des zurückgemeldeten Zustands; erkläre nur einen weiterhin bestehenden Fehler kurz und konkret. Behaupte nicht, einen Screenshot oder die tatsächliche Bildschirmansicht gesehen zu haben.
 Nie JavaScript, Shell oder beliebigen Code ausführen.
 Antworte in natürlichem, gut vorlesbarem Deutsch. Anatomische Namen dürfen erklärt werden, auch wenn sie nicht als Mesh existieren.

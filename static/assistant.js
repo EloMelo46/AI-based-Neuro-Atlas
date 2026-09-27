@@ -127,11 +127,16 @@ export async function initAssistant(viewer) {
     }
   });
   microphone = initMicrophone({ button: document.getElementById('assistant-mic'), status, setBusy, onStart: speech.stop,
+    onRecordingChange(active) { document.body.classList.toggle('assistant-listening', active); },
     onText(text) {
       input.value = text;
       document.getElementById('assistant-form').requestSubmit();
     },
     onError(text) { message(text, 'error'); status.textContent = 'Mikrofoneingabe fehlgeschlagen.'; },
+  });
+  document.addEventListener('gesture-listen', event => {
+    if (event.detail.active) void microphone.start('gesture');
+    else microphone.stop('gesture', event.detail.cancel);
   });
   reset.addEventListener('click', async () => {
     if (busy) return;

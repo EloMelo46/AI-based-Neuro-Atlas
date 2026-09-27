@@ -240,16 +240,17 @@ export function createBrainAppearance(THREE, scene, regions, requestRender, onSt
     requestRender();
   }
 
-  select.addEventListener('change', () => {
-    if (!Object.hasOwn(STYLES, select.value)) return;
-    current = select.value;
+  function setStyle(style) {
+    if (!Object.hasOwn(STYLES, style)) throw new Error('Unbekannte Darstellung.');
+    current = style;
     try { localStorage.setItem(STORAGE_KEY, current); } catch { /* Optional persistence. */ }
     applyStyle();
     onStyleChange?.();
-  });
+  }
+  select.addEventListener('change', () => setStyle(select.value));
   applyStyle();
   return {
-    createMaterial, applyRegion, getStyle: () => current,
+    createMaterial, applyRegion, setStyle, getStyle: () => current,
     getContextOpacity: () => contextOpacities[current] ?? 0.03,
     setCutsActive(active) {
       if (cutsActive === active) return;

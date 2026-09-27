@@ -77,11 +77,11 @@ HTML = r"""
   <p id="status" role="status">{{ count }} Regionen gefunden – 3D-Ansicht wird gestartet …</p>
   <button id="reset" disabled>Ansicht zurücksetzen</button>
   <section aria-label="Gestensteuerung">
-    <label><input id="gesture-enabled" type="checkbox" checked> Mit Handgesten drehen</label>
+    <label><input id="gesture-enabled" type="checkbox" checked> Handgesten aktiv</label>
     <p id="gesture-status" class="hint" role="status">Gestenerkennung wird geprüft …</p>
     <details id="gesture-preview">
       <summary>Kameravorschau mit Handpunkten</summary>
-      <img id="gesture-image" alt="Kamerabild mit nummerierten Handpunkten und Greifanzeige" style="width:100%;max-width:640px">
+      <img id="gesture-image" alt="Kamerabild mit nummerierten Handpunkten und Gestenanzeige" style="width:100%;max-width:640px">
     </details>
   </section>
   <p><label class="rotation-option"><input id="auto-rotate" type="checkbox" checked> Langsam drehen</label></p>

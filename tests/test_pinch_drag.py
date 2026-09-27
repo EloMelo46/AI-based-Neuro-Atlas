@@ -63,7 +63,7 @@ class WorkerTimingTests(unittest.TestCase):
         service.stop_event.is_set.side_effect = lambda: clock[0] >= 115
         service.stop_event.wait.side_effect = lambda seconds: clock.__setitem__(0, clock[0] + max(seconds, 0.001))
         service.wants_preview.return_value = False
-        service.publish.side_effect = lambda event, idle: published.append((clock[0], event, idle))
+        service.publish.side_effect = lambda event, idle, **kwargs: published.append((clock[0], event, idle))
         camera = MagicMock()
         camera.capture_array.return_value = np.zeros((480, 640, 3), dtype=np.uint8)
         landmarker = MagicMock()

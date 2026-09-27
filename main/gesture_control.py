@@ -12,12 +12,13 @@ from mediapipe.tasks.python import vision
 from picamera2 import Picamera2
 
 MODEL_PATH = Path(__file__).resolve().parent.parent / "models" / "hand_landmarker.task"
-IDLE_FPS = 3
-IDLE_TIMEOUT_SECONDS = 60
-PINCH_CLOSE = 0.40  # Abstand 4–8 relativ zur Handbreite (5–17).
-PINCH_OPEN = 0.55   # Unterschiedliche Schwellen verhindern Flackern.
-POINTER_SMOOTHING = 0.4
-ACTIVE_FPS = 20
+IDLE_FPS = 3                    # Maximale Bildrate, wenn keine Hand erkannt wird.
+IDLE_TIMEOUT_SECONDS = 60       # Sekunden ohne Hand erkannt, bevor die Bildrate reduziert wird.
+PINCH_CLOSE = 0.30              # Abstand 4–8 relativ zur Handbreite (5–17).
+PINCH_OPEN = 0.5               # Unterschiedliche Schwellen verhindern Flackern.
+POINTER_SMOOTHING = 0.4         # Glättung der Cursorbewegung, 0 = keine Glättung, 1 = keine Bewegung.
+ACTIVE_FPS = 20                 # Maximale Bildrate, wenn eine Hand erkannt wird.
+LISTEN_HOLD_SECONDS = 0.6       # 0.6 Sekunden halten, um Push-to-Talk zu aktivieren.
 
 
 class PinchDrag:
@@ -70,10 +71,48 @@ class PinchDrag:
                 (self.cursor[1] - previous[1]) / (height - 1))
 
 
-def draw_gesture(image, gesture, hand, idle):
+class IndexHold:
+    """Only an upright index finger, held continuously, enables push-to-talk."""
+
+    def __init__(self):
+        self.since = None
+        self.listening = False
+
+    def update(self, hand, width, height, now, blocked=False):
+        pointing = False
+        if hand and not blocked:
+            points = [(p.x * width, p.y * height) for p in hand]
+            def distance(a, b):
+                return hypot(points[a][0] - points[b][0], points[a][1] - points[b][1])
+            palm = distance(5, 17)
+            if palm >= 1:
+                # Screen-up direction and extension relative to the wrist.
+                # Ratios make this independent of distance to the camera.
+                pointing = (
+                    points[5][1] - points[8][1] > palm * 0.65
+                    and points[6][1] - points[8][1] > palm * 0.25
+                    and distance(0, 8) > distance(0, 6) * 1.15
+                    and distance(4, 8) > palm * PINCH_OPEN
+                    and all(distance(0, tip) < distance(0, pip) * 1.1
+                            for pip, tip in ((10, 12), (14, 16), (18, 20)))
+                )
+        if not pointing:
+            self.since = None
+            self.listening = False
+        else:
+            if self.since is None:
+                self.since = now
+            self.listening = now - self.since >= LISTEN_HOLD_SECONDS
+        return self.listening
+
+
+def draw_gesture(image, gesture, hand, idle, listen):
     height, width = image.shape[:2]
     color = (0, 220, 0) if gesture.holding else (0, 200, 255)
     state = "GREIFEN - Modell drehen" if gesture.holding else "OFFEN - keine Drehung"
+    if listen.since is not None:
+        color = (255, 255, 255)
+        state = "SPRECHGESTE - Finger senken zum Senden" if listen.listening else "ZEIGEFINGER - 0.5 s halten"
     if not hand:
         state = "KEINE HAND - keine Drehung"
     cv2.rectangle(image, (0, 0), (width, 65), (25, 25, 25), -1)
@@ -111,6 +150,7 @@ def run(service):
         min_tracking_confidence=0.5,
     )
     gesture = PinchDrag()
+    listen = IndexHold()
     with vision.HandLandmarker.create_from_options(options) as landmarker:
         camera = Picamera2(0)
         try:
@@ -136,7 +176,9 @@ def run(service):
                     last_hand_seen = now
                 idle = last_hand_seen is None or now - last_hand_seen >= IDLE_TIMEOUT_SECONDS
                 height, width = rgb.shape[:2]
-                service.publish(gesture.update(hand, width, height), idle)
+                event = gesture.update(hand, width, height)
+                listening = listen.update(hand, width, height, now, blocked=gesture.holding)
+                service.publish(event, idle, listening=listening)
                 if service.wants_preview():
                     image = cv2.flip(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR), 1)
                     for number, point in enumerate(hand or []):
@@ -145,7 +187,7 @@ def run(service):
                             cv2.circle(image, (x, y), 4, (0, 200, 255), -1)
                             cv2.putText(image, str(number), (x + 5, y - 5),
                                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
-                    draw_gesture(image, gesture, hand, idle)
+                    draw_gesture(image, gesture, hand, idle, listen)
                     ok, jpeg = cv2.imencode('.jpg', image, [cv2.IMWRITE_JPEG_QUALITY, 75])
                     if ok:
                         service.set_preview(jpeg.tobytes())
