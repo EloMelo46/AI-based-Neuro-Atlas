@@ -18,7 +18,9 @@ from main.brain_viewer import app, MESH_DIR
 from main.brain_assistant import (validate_action, validate_state, APIError,
     generate_speech, transcribe_audio, tools_for, focus_result_error, DEFAULT_MODEL)
 from main.realtime_assistant import create_realtime_secret
-from main.mesh_catalog import EXCLUDED_MESH_FILES, available_region_ids
+from main.mesh_catalog import EXCLUDED_MESH_FILES, available_region_ids, load_regions
+from main.region_groups import groups_for_ids
+from main.viewer_settings import FOCUS_CONTEXT_OPACITIES
 
 
 class AssistantTests(unittest.TestCase):
@@ -63,15 +65,15 @@ class AssistantTests(unittest.TestCase):
     def test_opacity(self):
         for opacity in [0, 0.3, 1]:
             action = validate_action('set_opacity',
-                {'region_ids': ['Left-Hippocampus'], 'opacity': opacity}, self.state['loaded'])
+                {'region_ids': ['subcortex.aseg.lh_hippocampus'], 'opacity': opacity}, self.state['loaded'])
             self.assertEqual(action['arguments']['opacity'], opacity)
         for opacity in [-1, 1.1, True, '0.5', float('nan')]:
             with self.assertRaises(ValueError):
-                validate_action('set_opacity', {'region_ids': ['Left-Hippocampus'], 'opacity': opacity}, self.state['loaded'])
-        self.state['opacities'] = {'Left-Hippocampus': 0.3}
+                validate_action('set_opacity', {'region_ids': ['subcortex.aseg.lh_hippocampus'], 'opacity': opacity}, self.state['loaded'])
+        self.state['opacities'] = {'subcortex.aseg.lh_hippocampus': 0.3}
         clean = validate_state(self.state, self.state['loaded'])
-        self.assertEqual(clean['opacities']['Left-Hippocampus'], 0.3)
-        self.assertEqual(clean['opacities']['Right-Hippocampus'], 1)
+        self.assertEqual(clean['opacities']['subcortex.aseg.lh_hippocampus'], 0.3)
+        self.assertEqual(clean['opacities']['subcortex.aseg.rh_hippocampus'], 1)
         definitions = tools_for(self.state['loaded'])
         self.assertNotIn('focus_regions', [item['name'] for item in definitions])
         self.assertNotIn('highlight_regions', [item['name'] for item in definitions])
@@ -125,7 +127,8 @@ class AssistantTests(unittest.TestCase):
             self.assertEqual(payload, {
                 'model': 'gpt-4o-mini-tts', 'voice': 'marin', 'input': 'Hallo.',
                 'response_format': 'mp3', 'stream_format': 'audio', 'speed': 1.1,
-                'instructions': ('Sprich natürliches, klares Hochdeutsch mit warmer, ruhiger und kompetenter Stimme. '
+                'instructions': ('Lies den Text in seiner Sprache vor, ohne ihn zu übersetzen. '
+                    'Sprich natürlich und klar mit warmer, ruhiger und kompetenter Stimme. '
                     'Nutze ein entspanntes Erklärtempo, dezente lebendige Betonung und kurze sinnvolle Pausen '
                     'zwischen Gedankengängen. Sprich anatomische sowie lateinische Fachbegriffe besonders '
                     'deutlich aus. Vermeide monotones Ablesen und übertriebene Theatralik.'),
@@ -136,7 +139,7 @@ class AssistantTests(unittest.TestCase):
             self.assertEqual(transcribe_audio(b'audio', 'audio/webm'), 'Hippocampus')
             body = urlopen.call_args.args[0].data
             self.assertIn(b'gpt-4o-mini-transcribe', body)
-            self.assertIn(b'name="language"\r\n\r\nde', body)
+            self.assertNotIn(b'name="language"', body)
             self.assertIn(b'name="response_format"\r\n\r\njson', body)
 
     def test_audio_network_error_is_diagnosable(self):
@@ -185,23 +188,23 @@ class AssistantTests(unittest.TestCase):
         self.assertNotIn('Ziehen: drehen · Zwei Finger:', page)
         self.assertNotIn('Je Achse bleibt der Bereich', page)
         self.assertIn('id="mesh-detail"', page)
-        self.assertIn(f"576{chr(0x2019)}008 Dreiecke", page)
-        self.assertIn(f"2{chr(0x2019)}842{chr(0x2019)}152 Dreiecke", page)
-        csf_start = page.index('title="CSF.obj"')
-        csf_row = page[csf_start:page.index('</label>', csf_start)]
-        self.assertNotIn(' checked', csf_row)
+        triangles = sum(region['triangles_optimized'] for region in load_regions(MESH_DIR) if region['renderable'])
+        self.assertIn(f"{triangles:,}".replace(',', chr(0x2019)) + ' Dreiecke', page)
+        self.assertIn('Voll · nicht exportiert', page)
+        self.assertNotIn('title="CSF.obj"', page)
 
     def test_mesh_detail_routes(self):
-        optimized = self.client.get('/mesh/CC_Central.obj?detail=optimized')
-        full = self.client.get('/mesh/CC_Central.obj?detail=full')
+        region = next(record for record in load_regions(MESH_DIR)
+                      if record['region_id'] == 'subcortex.aseg.corpus_callosum')
+        path = '/mesh/' + region['mesh_glb']
+        optimized = self.client.get(path + '?detail=optimized')
         self.assertEqual(optimized.status_code, 200)
-        self.assertEqual(full.status_code, 200)
-        self.assertGreater(len(full.data), len(optimized.data))
+        self.assertEqual(optimized.mimetype, 'model/gltf-binary')
+        self.assertEqual(optimized.data[:4], b'glTF')
         optimized.close()
-        full.close()
-        self.assertEqual(self.client.get('/mesh/CC_Central.obj?detail=invalid').status_code, 400)
-        page = self.client.get('/?detail=full').get_data(as_text=True)
-        self.assertIn('<option value="full" selected', page)
+        self.assertEqual(self.client.get(path + '?detail=full').status_code, 404)
+        self.assertEqual(self.client.get(path + '?detail=invalid').status_code, 400)
+        self.assertEqual(self.client.get('/mesh/CC_Central.obj').status_code, 404)
 
     def setUp(self):
         self.client = app.test_client()
@@ -212,18 +215,17 @@ class AssistantTests(unittest.TestCase):
     def test_removed_meshes_are_absent_from_page_downloads_and_ai(self):
         page = self.client.get('/').get_data(as_text=True)
         names = json.loads(re.search(r'<script id="mesh-list"[^>]*>(.*?)</script>', page).group(1))
-        self.assertEqual(len(names), 38)
-        self.assertEqual({name[:-4] for name in names}, set(self.state['loaded']))
+        self.assertEqual(len(names), sum(r['renderable'] for r in load_regions(MESH_DIR)))
+        self.assertEqual({record['region_id'] for record in names if record['selectable']}, set(self.state['loaded']))
         for name in EXCLUDED_MESH_FILES:
             with self.subTest(name=name):
-                self.assertTrue((MESH_DIR / name).is_file(), 'Source assets must be retained')
                 self.assertNotIn(name, page)
                 for detail in ('optimized', 'full'):
                     self.assertEqual(self.client.get(f'/mesh/{name}?detail={detail}').status_code, 404)
                 with self.assertRaises(ValueError):
                     validate_action('set_opacity', {'region_ids': [name[:-4]], 'opacity': 1}, self.state['loaded'])
-        for name in ('Left-Hippocampus', 'Right-Hippocampus', 'Left-Cerebral-Cortex',
-                     'Right-Cerebral-Cortex', 'Left-Cerebral-White-Matter', 'Right-Cerebral-White-Matter', 'CSF'):
+        for name in ('subcortex.aseg.lh_hippocampus', 'subcortex.aseg.rh_hippocampus', 'cortex.dkt.lh.precentral',
+                     'cortex.dkt.rh.precentral', 'subcortex.aseg.lh_cerebral_white_matter', 'subcortex.aseg.rh_cerebral_white_matter'):
             self.assertIn(name, self.state['loaded'])
         response = {'output': [{'type': 'message', 'content': [
             {'type': 'output_text', 'text': 'Hallo.', 'annotations': []}]}]}
@@ -235,10 +237,15 @@ class AssistantTests(unittest.TestCase):
             context = json.loads(payload['instructions'].split('\nKontext: ', 1)[1])
             self.assertEqual(context['regions'], self.state['loaded'])
             self.assertEqual(context['view']['loaded'], self.state['loaded'])
+            medulla = next(item for item in context['vocabulary']['regions']
+                           if item['region_ids'] == ['subcortex.brainstem.medulla'])
+            self.assertIn('Verlängertes Mark', medulla['names'])
+            self.assertTrue(any(item['name'] == 'Rückenmark' for item in context['vocabulary']['selection_shortcuts']))
             for definition in payload['tools']:
                 properties = definition.get('parameters', {}).get('properties', {})
                 if 'region_ids' in properties:
-                    self.assertEqual(properties['region_ids']['items']['enum'], self.state['loaded'])
+                    self.assertEqual(properties['region_ids']['items']['enum'], self.state['loaded'] +
+                                     [group['group_id'] for group in groups_for_ids(self.state['loaded'])])
             for name in EXCLUDED_MESH_FILES:
                 self.assertNotIn(name[:-4], payload['instructions'])
         stale = copy.deepcopy(self.state)
@@ -249,7 +256,7 @@ class AssistantTests(unittest.TestCase):
     def test_acknowledged_tool_roundtrip(self):
         responses = [
             {'status': 'completed', 'output': [{'type': 'function_call', 'call_id': 'call_1',
-                'name': 'isolate_regions', 'arguments': json.dumps({'region_ids': ['Left-Hippocampus']})}]},
+                'name': 'isolate_regions', 'arguments': json.dumps({'region_ids': ['subcortex.aseg.lh_hippocampus']})}]},
             {'status': 'completed', 'output': [{'type': 'message', 'content': [{'type': 'output_text',
                 'text': 'Der linke Hippocampus ist markiert.', 'annotations': []}]}]},
         ]
@@ -265,7 +272,7 @@ class AssistantTests(unittest.TestCase):
                 json={'message': 'Markiere den linken Hippocampus', 'state': self.state}))
             self.assertEqual(result['actions'][0]['name'], 'isolate_regions')
             self.assertEqual(api.call_count, 1)
-            self.state = self.focus_state(['Left-Hippocampus'])
+            self.state = self.focus_state(['subcortex.aseg.lh_hippocampus'])
             response = self.client.post('/api/assistant/chat', headers=self.headers, json={
                 'turn_id': result['turn_id'], 'results': [{'call_id': 'call_1', 'ok': True}], 'state': self.state})
             self.assertTrue(any(event.get('type') == 'delta' for event in self.stream_events(response)))
@@ -286,14 +293,14 @@ class AssistantTests(unittest.TestCase):
     def focus_state(self, targets):
         state = copy.deepcopy(self.state)
         state['visible'] = [region_id for region_id in state['loaded']
-                            if region_id != 'CSF' or region_id in targets]
+                            if not region_id.startswith('csf.') or region_id in targets]
         state['highlighted'] = targets[:]
-        state['opacities'] = {region_id: 1 if region_id in targets or region_id == 'CSF' else 0.03
+        state['opacities'] = {region_id: 1 if region_id in targets or region_id.startswith('csf.') else 0.03
                               for region_id in state['loaded']}
         return state
 
     def test_focus_result_rejects_invisible_or_incomplete_emphasis(self):
-        targets = ['Left-Thalamus', 'Right-Thalamus']
+        targets = ['subcortex.aseg.lh_thalamus', 'subcortex.aseg.rh_thalamus']
         action = validate_action('highlight_regions', {'region_ids': targets}, self.state['loaded'])
         self.assertEqual(action['name'], 'isolate_regions')
         state = self.focus_state(targets)
@@ -303,35 +310,34 @@ class AssistantTests(unittest.TestCase):
             with self.subTest(failure=failure):
                 broken = copy.deepcopy(state)
                 if failure == 'selection':
-                    broken['highlighted'] = ['Left-Cerebral-Cortex']
+                    broken['highlighted'] = ['cortex.dkt.lh.precentral']
                 elif failure == 'target_opacity':
-                    broken['opacities']['Left-Thalamus'] = 0.03
+                    broken['opacities']['subcortex.aseg.lh_thalamus'] = 0.03
                 elif failure == 'context_opacity':
-                    broken['opacities']['Left-Cerebral-Cortex'] = 1
+                    broken['opacities']['cortex.dkt.lh.precentral'] = 1
                 elif failure == 'hidden_target':
-                    broken['visible'].remove('Right-Thalamus')
+                    broken['visible'].remove('subcortex.aseg.rh_thalamus')
                 elif failure == 'hidden_context':
-                    broken['visible'].remove('Right-Hippocampus')
+                    broken['visible'].remove('subcortex.aseg.rh_hippocampus')
                 elif failure == 'csf':
-                    broken['visible'].append('CSF')
+                    broken['visible'].append('csf.aseg.missing_csf_24')
                 elif failure == 'cut':
                     broken['cuts']['x'] = [0, 50]
                 else:
-                    broken['loaded'].remove('Left-Thalamus')
+                    broken['loaded'].remove('subcortex.aseg.lh_thalamus')
                 self.assertIn('nicht bestätigt', focus_result_error(action, broken))
-        csf_action = validate_action('isolate_regions', {'region_ids': ['CSF']}, self.state['loaded'])
-        self.assertEqual(focus_result_error(csf_action, self.focus_state(['CSF'])), '')
+        self.assertEqual(validate_action('isolate_regions', {'region_ids': ['CSF']}, self.state['loaded'])['arguments']['region_ids'], ['csf.aseg.missing_csf_24'])
         with self.assertRaises(ValueError):
             validate_action('highlight_regions', {'region_ids': []}, self.state['loaded'])
 
     def test_focus_context_opacity_matches_appearance(self):
-        targets = ['Left-Thalamus', 'Right-Thalamus']
+        targets = ['subcortex.aseg.lh_thalamus', 'subcortex.aseg.rh_thalamus']
         action = validate_action('isolate_regions', {'region_ids': targets}, self.state['loaded'])
         # Validate the same configuration actually delivered to the renderer.
         page = self.client.get('/').get_data(as_text=True)
         settings = json.loads(re.search(r'<script id="focus-context-opacities"[^>]*>(.*?)</script>', page).group(1))
-        self.assertEqual(settings, {'learning': 0.03, 'natural': 0.03, 'digital': 0.4})
-        for style, opacity in [('learning', 0.03), ('natural', 0.03), ('digital', 0.4)]:
+        self.assertEqual(settings, FOCUS_CONTEXT_OPACITIES)
+        for style, opacity in FOCUS_CONTEXT_OPACITIES.items():
             with self.subTest(style=style):
                 state = self.focus_state(targets)
                 state['appearance'] = style
@@ -341,14 +347,14 @@ class AssistantTests(unittest.TestCase):
                 clean = validate_state(state, self.state['loaded'])
                 self.assertEqual(clean['appearance'], style)
                 self.assertEqual(focus_result_error(action, clean), '')
-                clean['opacities']['Left-Cerebral-Cortex'] = 0.03 if style == 'digital' else 0.4
+                clean['opacities']['cortex.dkt.lh.precentral'] = 0.03 if style == 'digital' else 0.4
                 self.assertIn('nicht bestätigt', focus_result_error(action, clean))
         for invalid in ['invalid', None, {}, True]:
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 validate_state({**self.state, 'appearance': invalid}, self.state['loaded'])
 
     def test_false_browser_success_is_reported_to_model_as_failure(self):
-        targets = ['Left-Thalamus', 'Right-Thalamus']
+        targets = ['subcortex.aseg.lh_thalamus', 'subcortex.aseg.rh_thalamus']
         responses = [
             {'output': [{'type': 'function_call', 'call_id': 'focus', 'name': 'highlight_regions',
                          'arguments': json.dumps({'region_ids': targets})}]},
@@ -362,7 +368,7 @@ class AssistantTests(unittest.TestCase):
                 json={'message': 'Zeige den Thalamus.', 'state': self.state}))
             self.assertEqual(first['actions'][0]['name'], 'isolate_regions')
             # Reproduce the old client: only the selection changes; cortex stays opaque.
-            stale = self.focus_state(['Left-Cerebral-Cortex', 'Right-Cerebral-Cortex'])
+            stale = self.focus_state(['cortex.dkt.lh.precentral', 'cortex.dkt.rh.precentral'])
             stale['highlighted'] = targets
             self.stream_result(self.client.post('/api/assistant/chat', headers=self.headers, json={
                 'turn_id': first['turn_id'], 'results': [{'call_id': 'focus', 'ok': True}], 'state': stale}))
@@ -371,13 +377,13 @@ class AssistantTests(unittest.TestCase):
             receipt = json.loads(output['output'])
             self.assertFalse(receipt['ok'])
             self.assertIn('Deckkraft', receipt['error'])
-            self.assertEqual(receipt['state']['opacities']['Left-Thalamus'], 0.03)
+            self.assertEqual(receipt['state']['opacities']['subcortex.aseg.lh_thalamus'], 0.03)
 
     def test_each_action_keeps_its_own_state_before_a_requested_cut(self):
         responses = [
             {'output': [
                 {'type': 'function_call', 'call_id': 'focus', 'name': 'isolate_regions',
-                 'arguments': json.dumps({'region_ids': ['Left-Thalamus']})},
+                 'arguments': json.dumps({'region_ids': ['subcortex.aseg.lh_thalamus']})},
                 {'type': 'function_call', 'call_id': 'cut', 'name': 'set_cut',
                  'arguments': json.dumps({'axis': 'x', 'min': 0, 'max': 50})}]},
             {'output': [{'type': 'message', 'content': [{'type': 'output_text',
@@ -388,7 +394,7 @@ class AssistantTests(unittest.TestCase):
         with patch('main.brain_assistant.stream_openai', side_effect=events) as api:
             first = self.stream_result(self.client.post('/api/assistant/chat', headers=self.headers,
                 json={'message': 'Zeige den Thalamus mit X-Schnitt 0 bis 50.', 'state': self.state}))
-            focus = self.focus_state(['Left-Thalamus'])
+            focus = self.focus_state(['subcortex.aseg.lh_thalamus'])
             cut = copy.deepcopy(focus)
             cut['cuts']['x'] = [0, 50]
             self.stream_result(self.client.post('/api/assistant/chat', headers=self.headers, json={

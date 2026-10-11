@@ -1,6 +1,5 @@
 from pathlib import Path
 from flask import Flask, Response, abort, render_template_string, request, send_from_directory
-import json
 import os
 import secrets
 
@@ -10,18 +9,19 @@ if __package__ in (None, ''):
     import sys
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from main.brain_assistant import create_assistant
-    from main.mesh_catalog import available_mesh_names
+    from main.mesh_catalog import DEFAULT_EXPORT_DIR, available_mesh_names, load_regions, region_groups, selection_aliases
+    from main.geometry_validation import cut_validation
     from main.viewer_settings import FOCUS_CONTEXT_OPACITIES
     from main.gesture_service import GestureService
 else:
     from .brain_assistant import create_assistant
-    from .mesh_catalog import available_mesh_names
+    from .mesh_catalog import DEFAULT_EXPORT_DIR, available_mesh_names, load_regions, region_groups, selection_aliases
+    from .geometry_validation import cut_validation
     from .viewer_settings import FOCUS_CONTEXT_OPACITIES
     from .gesture_service import GestureService
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-MESH_DIR = PROJECT_ROOT / "export_preview"
-FULL_MESH_DIR = PROJECT_ROOT / "export_all_areas"
+MESH_DIR = DEFAULT_EXPORT_DIR
 app = Flask(__name__, static_folder=str(PROJECT_ROOT / "static"), static_url_path="/static")
 app.secret_key = os.environ.get('BRAIN_VIEWER_SESSION_SECRET') or secrets.token_hex(32)
 app.config.update(MAX_CONTENT_LENGTH=11 * 1024 * 1024, SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Strict')
@@ -96,13 +96,10 @@ HTML = r"""
       </label>
     </div>
     <label for="mesh-detail">Mesh-Details
-      <select id="mesh-detail">
+      <select id="mesh-detail" disabled title="Vorbereitete Meshopt-GLBs">
         <option value="optimized"{% if mesh_detail == 'optimized' %} selected{% endif %}>Optimiert · {{ preview_triangles }} Dreiecke</option>
-        <option value="full"{% if mesh_detail == 'full' %} selected{% endif %}{% if not full_mesh_available %} disabled{% endif %}>Voll · {{ full_triangles }} Dreiecke</option>
+        <option value="full" disabled>Voll · nicht exportiert</option>
       </select>
-    </label>
-    <label for="resolution">Bildauflösung
-      <select id="resolution"><option value="0.75">Sparsam</option><option value="1" selected>Standard</option><option value="native">Hoch (Displayauflösung)</option></select>
     </label>
   </div>
   <details id="region-legend" open>
@@ -113,15 +110,17 @@ HTML = r"""
     </div>
     <p id="region-count" class="hint" role="status">Areal-Legende wird geladen …</p>
     <ul id="region-list">
-      {% for name in meshes %}
+      {% for region in meshes %}
+      {% if region.selectable %}
       <li>
-        <label class="region-row" for="region-{{ loop.index0 }}" title="{{ name }}">
-          <input id="region-{{ loop.index0 }}" type="checkbox"{% if name != 'CSF.obj' %} checked{% endif %} disabled>
+        <label class="region-row" for="region-{{ loop.index0 }}" title="{{ region.region_id }}">
+          <input id="region-{{ loop.index0 }}" type="checkbox" {% if region.default_visible %}checked{% endif %} disabled>
           <span id="region-color-{{ loop.index0 }}" class="region-color" aria-hidden="true"></span>
-          <span class="region-name">{{ name[:-4] }}</span>
+          <span class="region-name">{{ region.name }}</span>
           <span id="region-state-{{ loop.index0 }}" class="region-state">Lädt …</span>
         </label>
       </li>
+      {% endif %}
       {% endfor %}
     </ul>
   </details>
@@ -141,7 +140,8 @@ HTML = r"""
     {% endfor %}
     <button id="reset-cuts" disabled>Schnitte zurücksetzen</button>
     <p><label><input id="fill-cuts" type="checkbox" checked> Schnittflächen schließen</label></p>
-    <p class="hint">Gefüllte Schnitte benötigen zusätzliche Grafikleistung. Bei offenen Oberflächen sind Artefakte möglich.</p>
+    <p class="hint">Gefüllte Schnitte benötigen zusätzliche Grafikleistung. Nur geometrisch geprüfte Regionen erhalten Schnittflächen.</p>
+    {% if cut_excluded %}<p class="hint" id="cut-validation-status">{{ cut_excluded }} Regionen ohne verlässlich geprüfte Schnittfläche; ihre Originalgeometrie bleibt auswählbar.</p>{% endif %}
   </section>
   <ul id="errors" role="alert"></ul>
 </div>
@@ -174,6 +174,8 @@ HTML = r"""
 <script type="module" src="{{ url_for('static', filename='viewer_ui.js') }}"></script>
 <script type="module" src="{{ url_for('static', filename='assistant_bridge.js') }}"></script>
 <script id="mesh-list" type="application/json">{{ meshes|tojson }}</script>
+<script id="region-groups" type="application/json">{{ groups|tojson }}</script>
+<script id="region-aliases" type="application/json">{{ aliases|tojson }}</script>
 <script id="focus-context-opacities" type="application/json">{{ focus_context_opacities|tojson }}</script>
 <script>
   import({{ url_for('static', filename='brain_viewer.js')|tojson }}).catch((error) => {
@@ -190,23 +192,19 @@ HTML = r"""
 
 @app.route("/")
 def index():
-    meshes = available_mesh_names(MESH_DIR)
-    full_mesh_available = all((FULL_MESH_DIR / name).is_file() for name in meshes)
-    mesh_detail = request.args.get('detail', 'optimized')
-    if mesh_detail not in ('optimized', 'full') or (mesh_detail == 'full' and not full_mesh_available):
-        mesh_detail = 'optimized'
-    try:
-        manifest = json.loads((MESH_DIR / 'manifest.json').read_text(encoding='utf-8'))
-        manifest = [item for item in manifest if item['name'] in meshes]
-        preview_count = sum(int(item['preview']) for item in manifest)
-        full_count = sum(int(item['original']) for item in manifest)
-    except (OSError, ValueError, KeyError, TypeError):
-        preview_count = full_count = 0
+    regions = [region for region in load_regions(MESH_DIR) if region['renderable']]
+    validation = cut_validation(MESH_DIR, regions)
+    meshes = [{**region, **validation[region['region_id']],
+               'glb_url': '/mesh/' + region['mesh_glb'] + '?v=' + validation[region['region_id']]['mesh_sha256']}
+              for region in regions]
+    preview_count = sum(int(region.get('triangles_optimized') or 0) for region in meshes)
     triangle_label = lambda count: f'{count:,}'.replace(',', chr(0x2019)) if count else '–'
     return render_template_string(
-        HTML, meshes=meshes, count=len(meshes), mesh_detail=mesh_detail,
-        full_mesh_available=full_mesh_available, focus_context_opacities=FOCUS_CONTEXT_OPACITIES,
-        preview_triangles=triangle_label(preview_count), full_triangles=triangle_label(full_count))
+        HTML, meshes=meshes, count=len(meshes), mesh_detail='optimized',
+        groups=region_groups(MESH_DIR), aliases=selection_aliases(MESH_DIR),
+        cut_excluded=sum(not region['cut_eligible'] for region in meshes),
+        focus_context_opacities=FOCUS_CONTEXT_OPACITIES,
+        preview_triangles=triangle_label(preview_count))
 
 @app.route("/mesh/<path:filename>")
 def mesh(filename):
@@ -215,10 +213,10 @@ def mesh(filename):
     detail = request.args.get('detail', 'optimized')
     if detail not in ('optimized', 'full'):
         abort(400)
-    directory = FULL_MESH_DIR if detail == 'full' else MESH_DIR
-    if detail == 'full' and not (directory / filename).is_file():
+    if detail == 'full':
         abort(404)
-    return send_from_directory(directory, filename)
+    return send_from_directory(MESH_DIR, filename, mimetype='model/gltf-binary',
+                               conditional=True, max_age=3600)
 
 @app.get('/api/gestures/state')
 def gesture_state():

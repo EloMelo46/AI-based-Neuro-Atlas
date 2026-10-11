@@ -1,4 +1,5 @@
 import { naturalCutColor, prepareTissueVariation } from './tissue_appearance.js';
+import { createDigitalMaterial } from './digital_appearance.js';
 
 // Appearance changes reuse geometry and preserve anatomical selection and cuts.
 const STORAGE_KEY = 'neuroatlas.appearance';
@@ -9,7 +10,14 @@ function softenNormals(THREE, geometry) {
   const normals = geometry.getAttribute('normal');
   const indices = geometry.index?.array;
   if (!normals || !indices) return;
-  let previous = new Float32Array(normals.array);
+  // Meshopt normals may be normalized Int8 attributes interleaved with color.
+  // Accessors preserve their normalization and stride; raw .array does not.
+  let previous = new Float32Array(normals.count * 3);
+  for (let i = 0; i < normals.count; i++) {
+    previous[i * 3] = normals.getX(i);
+    previous[i * 3 + 1] = normals.getY(i);
+    previous[i * 3 + 2] = normals.getZ(i);
+  }
   let next = new Float32Array(previous.length);
   // Average nearby normal directions, not vertex positions. This softens the
   // voxel/decimation facets while retaining every anatomical boundary and cut.
@@ -94,6 +102,8 @@ export function createBrainAppearance(THREE, scene, regions, requestRender, onSt
 
   function applyMaterial(material, region) {
     const style = STYLES[current];
+    material.opacity = region.opacity ?? material.opacity;
+    if (material.uniforms?.opacity) material.uniforms.opacity.value = material.opacity;
     const digital = current === 'digital';
     const warm = current === 'digital' && region.highlighted;
     const transparent = digital || material.opacity < 1;
@@ -104,11 +114,11 @@ export function createBrainAppearance(THREE, scene, regions, requestRender, onSt
     material.side = side;
     material.userData.cutOpacityScale = digital ? 0.18 : 1;
     material.userData.cutColor ??= new THREE.Color();
-    material.userData.cutColor.set(current === 'natural' ? naturalCutColor(region.id) : regionColor(region));
+    material.userData.cutColor.set(current === 'natural' ? naturalCutColor(region.id, region.category) : regionColor(region));
     material.color.set(regionColor(region));
-    material.specular.set(style.specular);
+    material.specular?.set(style.specular);
     material.shininess = style.shininess;
-    material.emissive.set(style.emissive);
+    material.emissive?.set(style.emissive);
     material.userData.appearance.rimColor.value.set(warm ? 0xffce88 : style.rim);
     material.userData.appearance.rimStrength.value = style.rimStrength;
     material.userData.appearance.tissue.value = current === 'natural' ? 1 : 0;
@@ -117,17 +127,20 @@ export function createBrainAppearance(THREE, scene, regions, requestRender, onSt
     material.userData.appearance.focus.value = warm ? 1 : 0;
   }
 
-  function createMaterial(region, clippingPlanes, geometry) {
+  function createMaterial(region, clippingPlanes, geometry, anatomicalMatrix = new THREE.Matrix4()) {
     geometry.setAttribute('brainSoftNormal', geometry.getAttribute('normal'));
-    geometry.setAttribute('brainTissueVariation', new THREE.BufferAttribute(
-      new Float32Array(geometry.getAttribute('position').count).fill(0.5), 1));
-    if (current === 'natural') prepareTissueVariation(THREE, geometry);
+    // Quantized GLB positions stay compact on the GPU. Only the appearance
+    // coordinates are transformed to anatomical millimetres.
+    const anatomicalTransform = anatomicalMatrix.clone();
+    if (current === 'natural') prepareTissueVariation(THREE, geometry, anatomicalTransform);
     if (current !== 'learning') softenNormals(THREE, geometry);
     const material = new THREE.MeshPhongMaterial({
       side: THREE.DoubleSide, clippingPlanes,
       transparent: false, opacity: 1, depthWrite: true,
     });
     material.extensions = { derivatives: true };
+    material.defaultAttributeValues = { brainTissueVariation: [0.5] };
+    material.userData.anatomicalTransform = anatomicalTransform;
     const uniforms = {
       rimColor: { value: new THREE.Color() },
       rimStrength: { value: 0 },
@@ -149,20 +162,22 @@ export function createBrainAppearance(THREE, scene, regions, requestRender, onSt
       shader.uniforms.brainFocus = uniforms.focus;
       shader.uniforms.brainCenter = center;
       shader.uniforms.brainRadius = radius;
+      shader.uniforms.brainAnatomicalTransform = { value: anatomicalTransform };
       shader.vertexShader = shader.vertexShader
         .replace('#include <common>', `#include <common>
           varying vec3 vBrainPosition;
           varying float vBrainDepth;
           uniform vec3 brainCenter;
+          uniform mat4 brainAnatomicalTransform;
           attribute vec3 brainSoftNormal;
           attribute float brainTissueVariation;
           varying float vBrainTissueVariation;
           uniform float brainSoftness;`)
         .replace('#include <beginnormal_vertex>', `#include <beginnormal_vertex>
           objectNormal = mix(objectNormal, brainSoftNormal, brainSoftness);`)
-        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvBrainPosition = position;\nvBrainTissueVariation = brainTissueVariation;')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvBrainPosition = (brainAnatomicalTransform * vec4(position, 1.0)).xyz;\nvBrainTissueVariation = brainTissueVariation;')
         .replace('#include <project_vertex>', `#include <project_vertex>
-          vBrainDepth = -mvPosition.z + (modelViewMatrix * vec4(brainCenter, 1.0)).z;`);
+          vBrainDepth = -mvPosition.z + (viewMatrix * vec4(brainCenter, 1.0)).z;`);
       shader.fragmentShader = shader.fragmentShader
         .replace('#include <common>', `#include <common>
           varying vec3 vBrainPosition;
@@ -202,7 +217,7 @@ export function createBrainAppearance(THREE, scene, regions, requestRender, onSt
           }
           #include <output_fragment>`);
     };
-    material.customProgramCacheKey = () => 'brain-appearance-v4-baked-tissue';
+    material.customProgramCacheKey = () => 'brain-appearance-v5-quantized-solids';
     applyMaterial(material, region);
     return material;
   }
@@ -210,16 +225,41 @@ export function createBrainAppearance(THREE, scene, regions, requestRender, onSt
   function applyRegion(region) {
     region.object?.traverse(surface => {
       if (!surface.isMesh) return;
+      const detailed = surface.userData.appearanceMaterial ??= surface.material;
+      // The 3% context is an anatomical locator. Lighting every transparent
+      // layer of the whole atlas costs far more than rendering the targets.
+      // Keep both sides and the exact geometry/colors/opacity, but use an
+      // unlit single-pass material for this faint context in learning/natural.
+      if (current === 'digital') {
+        surface.userData.digitalMaterial ??= createDigitalMaterial(THREE, detailed, center, radius);
+        surface.material = surface.userData.digitalMaterial;
+      } else if (region.focusContext) {
+        if (!surface.userData.contextMaterial) {
+          const context = new THREE.MeshBasicMaterial({
+            side: THREE.DoubleSide, transparent: true, depthWrite: false,
+            forceSinglePass: true,
+          });
+          context.userData.appearance = detailed.userData.appearance;
+          context.userData.anatomicalTransform = detailed.userData.anatomicalTransform;
+          surface.userData.contextMaterial = context;
+        }
+        surface.material = surface.userData.contextMaterial;
+      } else {
+        surface.material = detailed;
+      }
+      // Selection may change the material while a clipping slab is active.
+      surface.material.clippingPlanes = detailed.clippingPlanes;
       if (current !== 'learning') softenNormals(THREE, surface.geometry);
-      if (current === 'natural') prepareTissueVariation(THREE, surface.geometry);
+      if (current === 'natural') prepareTissueVariation(THREE, surface.geometry, surface.material.userData.anatomicalTransform);
       applyMaterial(surface.material, region);
+      surface.material.visible = !region.sliceOnly;
     });
     updateSwatch(region);
   }
 
   function updateSwatch(region) {
-    const color = current === 'natural' && cutsActive ? naturalCutColor(region.id) : regionColor(region);
-    region.swatch.style.backgroundColor = new THREE.Color(color).getStyle();
+    const color = current === 'natural' && cutsActive ? naturalCutColor(region.id, region.category) : regionColor(region);
+    if (region.swatch) region.swatch.style.backgroundColor = new THREE.Color(color).getStyle();
   }
 
   function applyStyle() {
@@ -257,8 +297,9 @@ export function createBrainAppearance(THREE, scene, regions, requestRender, onSt
       cutsActive = active;
       regions.forEach(updateSwatch);
     },
-    setBounds(bounds) {
+    setBounds(bounds, anatomicalToWorld = new THREE.Matrix4()) {
       bounds.getCenter(center.value);
+      center.value.applyMatrix4(anatomicalToWorld);
       radius.value = Math.max(bounds.getSize(new THREE.Vector3()).length() / 2, 1);
     },
   };

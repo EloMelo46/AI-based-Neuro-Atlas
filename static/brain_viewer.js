@@ -1,53 +1,19 @@
 import * as THREE from 'three';
-import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { createCutCaps } from './cut_caps.js';
+import { createCutCulling } from './cut_culling.js';
+import { createCutDepthPrepass } from './cut_depth_prepass.js';
 import { createMentionGlow } from './mention_glow.js';
 import { createBrainAppearance } from './brain_appearance.js';
 import { attachGestureControl } from './gesture_control.js';
 import { attachViewer } from './assistant_bridge.js';
 
-// FreeSurfer triangle surfaces: two header lines, big-endian float32
-// coordinates and zero-based int32 triangle indices (regardless of extension).
-export function parseSurface(buffer) {
-  const bytes = new Uint8Array(buffer);
-  if (bytes[0] !== 255 || bytes[1] !== 255 || bytes[2] !== 254) {
-    return new OBJLoader().parse(new TextDecoder().decode(buffer));
-  }
-  const view = new DataView(buffer);
-  let offset = 3;
-  for (let line = 0; line < 2; line++) {
-    while (offset < bytes.length && bytes[offset] !== 10) offset++;
-    offset++;
-  }
-  if (offset + 8 > bytes.length) throw new Error('FreeSurfer-Header ist unvollständig.');
-  const vertexCount = view.getInt32(offset);
-  const faceCount = view.getInt32(offset + 4);
-  offset += 8;
-  if (vertexCount <= 0 || faceCount <= 0 || offset + 12 * (vertexCount + faceCount) > bytes.length) {
-    throw new Error('FreeSurfer-Geometriedaten fehlen oder sind unvollständig.');
-  }
-  const positions = new Float32Array(vertexCount * 3);
-  for (let i = 0; i < positions.length; i++, offset += 4) {
-    positions[i] = view.getFloat32(offset);
-    if (!Number.isFinite(positions[i])) throw new Error('Ungültige Koordinate.');
-  }
-  const indices = new Uint32Array(faceCount * 3);
-  for (let i = 0; i < indices.length; i++, offset += 4) {
-    const index = view.getInt32(offset);
-    if (index < 0 || index >= vertexCount) throw new Error('Ungültiger Dreiecksindex.');
-    indices[i] = index;
-  }
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  geometry.setIndex(new THREE.BufferAttribute(indices, 1));
-  geometry.computeVertexNormals();
-  return new THREE.Mesh(geometry);
-}
-
 const status = document.getElementById('status');
 const errors = document.getElementById('errors');
-const names = JSON.parse(document.getElementById('mesh-list').textContent);
+const manifest = JSON.parse(document.getElementById('mesh-list').textContent);
+const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
 const scene = new THREE.Scene();
 // Transparent canvas lets each appearance use a subtle CSS backdrop.
 const brain = new THREE.Group();
@@ -57,8 +23,12 @@ scene.add(brain);
 const sceneHost = document.getElementById('scene');
 const camera = new THREE.PerspectiveCamera(45, sceneHost.clientWidth / sceneHost.clientHeight, 0.1, 2000);
 const renderer = new THREE.WebGLRenderer({ antialias: true, stencil: true, alpha: true });
+// Region colors require separate materials. Depth before material ID reduces
+// opaque overdraw while retaining the explicit depth/stencil/cap render order.
+renderer.setOpaqueSort((a, b) => a.groupOrder - b.groupOrder || a.renderOrder - b.renderOrder
+  || a.z - b.z || a.material.id - b.material.id || a.id - b.id);
 renderer.localClippingEnabled = true;
-renderer.setPixelRatio(1);
+renderer.setPixelRatio(window.devicePixelRatio || 1);
 renderer.setSize(sceneHost.clientWidth, sceneHost.clientHeight);
 sceneHost.appendChild(renderer.domElement);
 const controls = new OrbitControls(camera, renderer.domElement);
@@ -82,6 +52,8 @@ document.addEventListener('visibilitychange', () => {
 });
 let framePending = false;
 let caps = null;
+let cutCulling = null;
+let depthPrepass = null;
 let mentionGlow = null;
 function requestRender() {
   if (framePending) return;
@@ -98,7 +70,8 @@ function requestRender() {
       camera.position.copy(controls.target).add(rotationOffset);
     }
     controls.update();
-    caps?.update(document.getElementById('fill-cuts').checked);
+    depthPrepass?.update();
+    caps?.update(document.getElementById('fill-cuts').checked, camera);
     const glowing = mentionGlow?.update(time);
     renderer.render(scene, camera);
     if (rotating || glowing) requestRender();
@@ -114,30 +87,75 @@ meshDetail.addEventListener('change', () => {
   window.location.assign(url);
 });
 function updateResolution() {
-  const value = document.getElementById('resolution').value;
-  renderer.setPixelRatio(value === 'native' ? window.devicePixelRatio || 1 : Number(value));
+  const ratio = window.devicePixelRatio || 1;
+  if (renderer.getPixelRatio() !== ratio) renderer.setPixelRatio(ratio);
 }
-document.getElementById('resolution').addEventListener('change', () => {
+// Moving between displays can change pixel density without changing CSS size.
+let displayDensity;
+function watchDisplayDensity() {
+  displayDensity?.removeEventListener('change', watchDisplayDensity);
   updateResolution();
+  displayDensity = matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+  displayDensity.addEventListener('change', watchDisplayDensity);
   requestRender();
-});
+}
+watchDisplayDensity();
 document.getElementById('fill-cuts').addEventListener('change', requestRender);
 let loaded = 0;
 let failed = 0;
+let cutsActive = false;
+let framedCutBounds = null;
 
 // Keep sorted file order and retain the original learning color for every region.
-const regions = names.map((name, index) => {
+const regions = manifest.map((metadata, index) => {
   const color = new THREE.Color().setHSL((index * 0.61803398875) % 1, 0.65, 0.6);
   const checkbox = document.getElementById(`region-${index}`);
   const state = document.getElementById(`region-state-${index}`);
   const swatch = document.getElementById(`region-color-${index}`);
-  const region = { id: name.slice(0, -4), color, checkbox, state, swatch, object: null, optIn: name === 'CSF.obj' };
-  checkbox.addEventListener('change', () => {
-    if (region.object) region.object.visible = checkbox.checked;
+  const region = { ...metadata, id: metadata.region_id, color, checkbox, state, swatch,
+    object: null, optIn: metadata.default_visible === false,
+    requestedVisible: metadata.default_visible !== false, sliceSuppressed: false, sliceOnly: false };
+  if (metadata.cut_validation_note && state) {
+    state.title = metadata.cut_validation_note;
+    checkbox.closest('.region-row')?.setAttribute('title', `${metadata.region_id}: ${metadata.cut_validation_note}`);
+  }
+  checkbox?.addEventListener('change', () => {
+    region.requestedVisible = checkbox.checked;
+    region.sliceSuppressed = !checkbox.checked;
+    syncRegionVisibility();
     updateRegionCount();
   });
   return region;
 });
+
+function syncRegionVisibility() {
+  const anatomy = regions.filter(region => region.selectable !== false && region.category !== 'csf');
+  // Faint focus context does not count as showing the complete brain. Technical
+  // fills and optional CSF are not part of the required anatomical selection.
+  const wholeBrainVisible = anatomy.length > 0 && anatomy.every(region =>
+    region.object && region.requestedVisible && !region.focusContext
+    && (region.opacity ?? 1) > 0 && region.visible_in_slice !== false);
+  for (const region of regions) {
+    region.sliceOnly = region.category === 'csf' && !region.requestedVisible && !region.sliceSuppressed
+      && cutsActive && wholeBrainVisible && region.visible_in_slice !== false;
+    if (region.object) {
+      region.object.visible = (region.requestedVisible || region.sliceOnly)
+        && (!cutsActive || region.visible_in_slice !== false);
+      region.object.traverse(surface => {
+        if (!surface.isMesh) return;
+        // Automatic CSF contributes a section, without hiding anatomy behind a
+        // large fluid shell. Stencil helpers still share this source geometry.
+        for (const material of new Set([surface.material, surface.userData.appearanceMaterial,
+          surface.userData.contextMaterial, surface.userData.digitalMaterial])) {
+          if (material) material.visible = !region.sliceOnly;
+        }
+      });
+    }
+    if (region.checkbox) region.checkbox.checked = region.requestedVisible;
+    if (region.state && region.object) region.state.textContent = region.sliceOnly ? 'Schnittfüllung'
+      : (region.opacity ?? 1) < 1 ? `${Math.round(region.opacity * 100)} % deckend` : '';
+  }
+}
 const appearance = createBrainAppearance(THREE, scene, regions, requestRender, () => {
   // Only automatic context follows the style. Explicit opacity edits survive.
   for (const region of regions) {
@@ -149,7 +167,7 @@ const appearance = createBrainAppearance(THREE, scene, regions, requestRender, (
 
 function updateRegionCount() {
   requestRender();
-  const available = regions.filter(region => region.object);
+  const available = regions.filter(region => region.object && region.selectable !== false);
   const visible = available.filter(region => region.object.visible).length;
   document.getElementById('region-count').textContent =
     `${visible} von ${available.length} geladenen Arealen eingeblendet`;
@@ -158,17 +176,19 @@ function updateRegionCount() {
 function setAllRegions(visible) {
   regions.forEach(region => {
     // Remember the choice for surfaces whose download is still in progress.
-    if (!region.object && region.state.dataset.failed) return;
+    if (!region.object && region.state?.dataset.failed) return;
     const nextVisibility = visible && !region.optIn;
-    region.checkbox.checked = nextVisibility;
-    if (region.object) region.object.visible = nextVisibility;
+    if (visible && region.object && region.focusContext) setRegionOpacity(region, 1, false);
+    region.requestedVisible = nextVisibility;
+    region.sliceSuppressed = !visible;
   });
+  syncRegionVisibility();
   updateRegionCount();
 }
 document.getElementById('show-regions').addEventListener('click', () => setAllRegions(true));
 document.getElementById('hide-regions').addEventListener('click', () => setAllRegions(false));
-document.getElementById('show-regions').disabled = names.length === 0;
-document.getElementById('hide-regions').disabled = names.length === 0;
+document.getElementById('show-regions').disabled = regions.length === 0;
+document.getElementById('hide-regions').disabled = regions.length === 0;
 updateRegionCount();
 
 // Define cuts in the original anatomical axes, then transform their planes
@@ -187,6 +207,9 @@ const cutInputs = cutAxes.map(axis => ({
 function updateCuts() {
   if (cutBounds.isEmpty()) return;
   const hasCuts = cutInputs.some(inputs => Number(inputs.min.value) > 0 || Number(inputs.max.value) < 100);
+  cutsActive = hasCuts;
+  if (!hasCuts) framedCutBounds = null;
+  syncRegionVisibility();
   appearance.setCutsActive(hasCuts);
   if (!hasCuts && resumeRotationAfterCuts) {
     rotationToggle.checked = true;
@@ -211,6 +234,24 @@ function updateCuts() {
       document.getElementById(`${axis}-${bound}-value`).value = `${cutInputs[index][bound].value} %`;
     }
   });
+  // Whole-brain viewing is the common Pi path: do not evaluate six inactive
+  // clipping planes in every fragment. Recompile only when their count changes;
+  // moving a slider updates the existing plane uniforms without CPU geometry work.
+  const activePlanes = cutPlanes.filter((_, index) => {
+    const inputs = cutInputs[Math.floor(index / 2)];
+    return index % 2 === 0 ? Number(inputs.min.value) > 0 : Number(inputs.max.value) < 100;
+  });
+  for (const region of regions) region.object?.traverse(child => {
+    if (!child.isMesh) return;
+    for (const material of new Set([child.material, child.userData.appearanceMaterial,
+      child.userData.contextMaterial, child.userData.digitalMaterial])) {
+      if (!material) continue;
+      if (material.clippingPlanes.length !== activePlanes.length) material.needsUpdate = true;
+      material.clippingPlanes = activePlanes;
+    }
+  });
+  cutCulling?.update(activePlanes);
+  updateRegionCount();
 }
 
 cutInputs.forEach((inputs, index) => {
@@ -237,29 +278,50 @@ function initializeCuts() {
   if (!loaded) return;
   brain.updateMatrixWorld(true);
   cutBounds.setFromObject(brain).applyMatrix4(brain.matrixWorld.clone().invert());
-  appearance.setBounds(cutBounds);
+  appearance.setBounds(cutBounds, brain.matrixWorld);
   updateCuts();
   cutAxes.forEach(axis => { document.getElementById(`cut-${axis}`).disabled = false; });
   document.getElementById('reset-cuts').disabled = false;
 }
 
+function cutFitDistance(bounds, direction, aspect, margin = 1.04) {
+  // Fit the projected rectangle, rather than a sphere around its diagonal.
+  // Only eight bounds corners are evaluated when a cut/viewport changes.
+  const center = bounds.getCenter(new THREE.Vector3());
+  const basis = new THREE.Matrix4().lookAt(center.clone().add(direction), center, camera.up);
+  const right = new THREE.Vector3(), up = new THREE.Vector3(), outward = new THREE.Vector3();
+  basis.extractBasis(right, up, outward);
+  const vertical = Math.tan(THREE.MathUtils.degToRad(camera.getEffectiveFOV()) / 2);
+  const horizontal = vertical * aspect;
+  let distance = 0.01;
+  for (const x of [bounds.min.x, bounds.max.x]) for (const y of [bounds.min.y, bounds.max.y])
+    for (const z of [bounds.min.z, bounds.max.z]) {
+      const offset = new THREE.Vector3(x, y, z).sub(center);
+      distance = Math.max(distance, offset.dot(outward) + margin * Math.max(
+        Math.abs(offset.dot(right)) / horizontal, Math.abs(offset.dot(up)) / vertical));
+    }
+  return distance;
+}
+
 // RAS anterior (+Y) becomes world -Z after the brain rotation: look from front-right.
 function fitCamera(targetBounds = null, direction = new THREE.Vector3(0.5, 0.3, -1), margin = 0.6) {
-  const bounds = targetBounds instanceof THREE.Box3 ? targetBounds : new THREE.Box3().setFromObject(brain);
+  const cutView = targetBounds instanceof THREE.Box3;
+  const bounds = cutView ? targetBounds : new THREE.Box3().setFromObject(brain);
   if (bounds.isEmpty()) return;
   const sphere = bounds.getBoundingSphere(new THREE.Sphere());
   const vertical = THREE.MathUtils.degToRad(camera.fov) / 2;
   const horizontal = Math.atan(Math.tan(vertical) * camera.aspect);
   const radius = Math.max(sphere.radius, 0.01);
-  // Cut views use a full bounding-sphere fit; the default view retains its zoom.
-  const distance = radius / Math.sin(Math.min(vertical, horizontal)) * margin;
+  const distance = cutView ? cutFitDistance(bounds, direction, camera.aspect)
+    : radius / Math.sin(Math.min(vertical, horizontal)) * margin;
+  framedCutBounds = cutView ? bounds.clone() : null;
   // Consume any pending drag/pan damping before applying an explicit camera view.
   const damping = controls.enableDamping;
   controls.enableDamping = false;
   controls.update();
   controls.target.copy(sphere.center);
   camera.position.copy(sphere.center).add(direction.clone().normalize().multiplyScalar(distance));
-  const offset = radius * 0.05;
+  const offset = cutView ? 0 : radius * 0.05;
   camera.position.y -= offset;
   controls.target.y -= offset;
   camera.near = radius / 1000;
@@ -300,47 +362,60 @@ function faceCut(axis, preferredBound = null) {
   resumeRotationAfterCuts ||= rotationToggle.checked;
   rotationToggle.checked = false;
   lastFrameTime = null;
-  fitCamera(faceBounds, normal, 1.02);
+  fitCamera(faceBounds, normal);
 }
 
 function updateStatus() {
-  status.textContent = `${loaded} von ${names.length} Regionen geladen` +
+  status.textContent = `${loaded} von ${regions.length} Regionen geladen` +
     (failed ? ` · ${failed} fehlgeschlagen` : '') +
-    (loaded + failed < names.length ? ' …' : '');
+    (loaded + failed < regions.length ? ' …' : '');
 }
 
-async function loadRegion(name, index) {
+async function loadRegion(region) {
+  let object = null;
   try {
-    const response = await fetch('/mesh/' + encodeURIComponent(name) + '?detail=' + encodeURIComponent(meshDetail.value));
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const object = parseSurface(await response.arrayBuffer());
+    const gltf = await loader.loadAsync(region.glb_url);
+    // The actual export is glTF Y-up (X right, Y superior, Z posterior).
+    // Restore RAS within the brain group so existing cut/assistant axes keep
+    // X=sagittal, Y=coronal, Z=axial. Preserve every quantization node transform.
+    object = new THREE.Group();
+    object.rotation.x = Math.PI / 2;
+    object.add(gltf.scene);
+    object.updateMatrixWorld(true);
     let triangles = 0;
     object.traverse(child => {
       if (!child.isMesh) return;
       triangles += (child.geometry.index?.count ?? child.geometry.attributes.position?.count ?? 0) / 3;
       const oldMaterials = Array.isArray(child.material) ? child.material : [child.material];
       oldMaterials.forEach(material => material.dispose());
-      child.material = appearance.createMaterial(regions[index], cutPlanes, child.geometry);
+      if (!child.geometry.getAttribute('normal')) child.geometry.computeVertexNormals();
+      child.material = appearance.createMaterial(region, [], child.geometry, child.matrixWorld);
+      child.userData.cutEligible = region.cut_eligible === true;
+      child.userData.cutPriority = region.category === 'csf' ? -2 : region.render_role === 'fill' ? -1 : 0;
     });
     if (!triangles) throw new Error('Datei enthält keine Dreiecksflächen.');
-    object.name = name;
-    object.visible = regions[index].checkbox.checked;
+    object.name = region.id;
+    object.visible = region.requestedVisible;
     brain.add(object);
-    regions[index].object = object;
-    regions[index].checkbox.disabled = false;
-    regions[index].state.textContent = '';
+    region.object = object;
+    appearance.applyRegion(region);
+    if (region.checkbox) region.checkbox.disabled = false;
+    if (region.state) region.state.textContent = '';
     loaded++;
     if (loaded === 1) fitCamera();
   } catch (error) {
+    if (object) disposeObject(object);
     failed++;
-    regions[index].checkbox.checked = false;
-    regions[index].checkbox.disabled = true;
-    regions[index].state.textContent = 'Fehler';
-    regions[index].state.dataset.failed = 'true';
+    if (region.checkbox) {
+      region.checkbox.checked = false;
+      region.checkbox.disabled = true;
+      region.state.textContent = 'Fehler';
+      region.state.dataset.failed = 'true';
+    }
     const item = document.createElement('li');
-    item.textContent = `${name}: ${error.message}`;
+    item.textContent = `${region.name ?? region.id}: ${error.message}`;
     errors.appendChild(item);
-    console.error(name, error);
+    console.error(region.id, error);
   }
   updateStatus();
   updateRegionCount();
@@ -353,7 +428,13 @@ new ResizeObserver(() => {
   const halfFov = THREE.MathUtils.degToRad(camera.fov) / 2;
   const oldAngle = Math.atan(Math.tan(halfFov) * Math.min(1, camera.aspect));
   const newAngle = Math.atan(Math.tan(halfFov) * Math.min(1, aspect));
-  if (newAngle > 0) camera.position.sub(controls.target).multiplyScalar(Math.sin(oldAngle) / Math.sin(newAngle)).add(controls.target);
+  if (newAngle > 0) {
+    const direction = camera.position.clone().sub(controls.target).normalize();
+    const scale = framedCutBounds
+      ? cutFitDistance(framedCutBounds, direction, aspect) / cutFitDistance(framedCutBounds, direction, camera.aspect)
+      : Math.sin(oldAngle) / Math.sin(newAngle);
+    camera.position.sub(controls.target).multiplyScalar(scale).add(controls.target);
+  }
   camera.aspect = aspect;
   camera.updateProjectionMatrix();
   updateResolution();
@@ -368,41 +449,88 @@ renderer.domElement.addEventListener('webglcontextlost', event => {
 updateStatus();
 // Limit concurrent downloads and parsing of large surfaces.
 let next = 0;
-await Promise.all(Array.from({ length: Math.min(4, names.length) }, async () => {
-  while (next < names.length) {
+await Promise.all(Array.from({ length: Math.min(4, regions.length) }, async () => {
+  while (next < regions.length) {
     const index = next++;
-    await loadRegion(names[index], index);
+    await loadRegion(regions[index]);
   }
 }));
+cutCulling = createCutCulling(THREE, brain);
 fitCamera();
 initializeCuts();
 caps = createCutCaps(THREE, scene, brain, cutPlanes);
+depthPrepass = createCutDepthPrepass(THREE, scene, brain);
 requestRender();
 document.getElementById('reset').disabled = loaded === 0;
-if (!names.length) status.textContent = 'Keine .obj-Dateien in export_preview gefunden.';
+if (!regions.length) status.textContent = 'Keine vollständigen GLB-Regionen im Manifest gefunden.';
 
-const regionMap = new Map(regions.map((region, index) => [names[index].slice(0, -4), region]));
+const regionMap = new Map(regions.map(region => [region.id, region]));
 mentionGlow = createMentionGlow(THREE, scene, regionMap, cutPlanes, requestRender, appearance.getStyle);
+
+export function getRenderDiagnostics() {
+  const buffers = new Set();
+  brain.traverse(object => {
+    if (!object.isMesh) return;
+    for (const attribute of [...Object.values(object.geometry.attributes), object.geometry.index]) {
+      if (attribute) buffers.add(attribute.isInterleavedBufferAttribute ? attribute.data : attribute);
+    }
+  });
+  return {
+    loadedRegions: loaded, failedRegions: failed,
+    memory: { ...renderer.info.memory, programs: renderer.info.programs?.length ?? 0 },
+    // Attribute/index upload payload only, excluding driver/framebuffer overhead.
+    // Stencil helpers reuse these buffers; aliased/interleaved attributes count once.
+    geometryBufferBytes: [...buffers].reduce((bytes, buffer) => bytes + buffer.array.byteLength, 0),
+    render: { ...renderer.info.render },
+    clipping: cutCulling?.getDiagnostics(),
+    caps: caps?.getDiagnostics(),
+    depthPrepass: depthPrepass?.getDiagnostics(),
+    anatomicalBounds: { min: cutBounds.min.toArray(), max: cutBounds.max.toArray() },
+  };
+}
+
+function disposeObject(object) {
+  object.traverse(child => {
+    if (!child.isMesh) return;
+    child.geometry.dispose();
+    const materials = Array.isArray(child.material) ? child.material : [child.material];
+    for (const material of new Set([...materials, child.userData.appearanceMaterial,
+      child.userData.contextMaterial, child.userData.digitalMaterial])) {
+      material?.dispose();
+    }
+  });
+  object.removeFromParent();
+}
+window.addEventListener('pagehide', event => {
+  if (event.persisted) return; // Browser back/forward cache owns this live scene.
+  displayDensity?.removeEventListener('change', watchDisplayDensity);
+  mentionGlow?.clear();
+  caps?.dispose();
+  depthPrepass?.dispose();
+  for (const region of regions) if (region.object) disposeObject(region.object);
+  controls.dispose();
+  renderer.dispose();
+});
 
 function setRegionOpacity(region, opacity, makeVisible = true, focusContext = false) {
   region.opacity = opacity;
   region.focusContext = focusContext;
   if (makeVisible) {
-    region.object.visible = true;
-    region.checkbox.checked = true;
+    region.requestedVisible = true;
+    region.sliceSuppressed = false;
   }
   region.object.traverse(child => {
     if (!child.isMesh) return;
     child.material.opacity = opacity;
   });
   appearance.applyRegion(region);
-  region.state.textContent = opacity < 1 ? `${Math.round(opacity * 100)} % deckend` : '';
+  if (region.state) region.state.textContent = opacity < 1 ? `${Math.round(opacity * 100)} % deckend` : '';
 }
 
 function selectRegions(selected) {
   for (const region of regions) {
     if (!region.object) continue;
-    region.highlighted = selected.includes(region);
+    region.highlighted = region.highlightable !== false && selected.includes(region);
     if (!selected.length) region.focusContext = false;
     appearance.applyRegion(region);
   }
@@ -413,12 +541,12 @@ export const assistantViewer = {
   clearMentionGlow() { mentionGlow.clear(); },
   getMentionedRegions() { return mentionGlow.getActiveIds(); },
   getState() {
-    const matching = predicate => [...regionMap].filter(([, region]) => region.object && predicate(region)).map(([id]) => id);
+    const matching = predicate => [...regionMap].filter(([, region]) => region.selectable !== false && region.object && predicate(region)).map(([id]) => id);
     return {
       appearance: appearance.getStyle(),
       loaded: matching(() => true), visible: matching(region => region.object.visible),
       highlighted: matching(region => region.highlighted),
-      opacities: Object.fromEntries([...regionMap].filter(([, region]) => region.object).map(([id, region]) => [id, region.opacity ?? 1])),
+      opacities: Object.fromEntries([...regionMap].filter(([, region]) => region.object && region.selectable !== false).map(([id, region]) => [id, region.opacity ?? 1])),
       cuts: Object.fromEntries(cutAxes.map((axis, index) => [axis, [Number(cutInputs[index].min.value), Number(cutInputs[index].max.value)]])),
     };
   },
@@ -428,7 +556,8 @@ export const assistantViewer = {
     if (!allowed.includes(action.name) || !args || typeof args !== 'object') throw new Error('Unbekannte Vieweraktion.');
     const selected = (args.region_ids ?? []).map(id => {
       const region = regionMap.get(id);
-      if (!region?.object) throw new Error(`Areal nicht geladen: ${id}`);
+      if (!region?.object || region.selectable === false) throw new Error(`Areal nicht auswählbar: ${id}`);
+      if (['highlight_regions', 'isolate_regions'].includes(action.name) && region.highlightable === false) throw new Error(`Areal nicht hervorhebbar: ${id}`);
       return region;
     });
     const focusing = action.name === 'isolate_regions' || (action.name === 'highlight_regions' && selected.length > 0);
@@ -443,8 +572,8 @@ export const assistantViewer = {
       for (const region of regions) {
         if (!region.object) continue;
         if (selected.includes(region)) {
-          region.object.visible = args.visible;
-          region.checkbox.checked = region.object.visible;
+          region.requestedVisible = args.visible;
+          region.sliceSuppressed = !args.visible;
         }
       }
     } else if (focusing) {
@@ -454,8 +583,8 @@ export const assistantViewer = {
         if (!region.object) continue;
         if (region.optIn && !selected.includes(region)) {
           setRegionOpacity(region, 1, false);
-          region.object.visible = false;
-          region.checkbox.checked = false;
+          region.requestedVisible = false;
+          region.sliceSuppressed = false;
         } else {
           const target = selected.includes(region);
           setRegionOpacity(region, target ? 1 : appearance.getContextOpacity(), true, !target);
@@ -484,6 +613,7 @@ export const assistantViewer = {
       document.getElementById('reset-cuts').click();
       fitCamera();
     }
+    syncRegionVisibility();
     updateRegionCount();
     requestRender();
     const state = this.getState();
@@ -512,7 +642,15 @@ export const assistantViewer = {
       set_opacity: `Deckkraft: ${Math.round(action.arguments.opacity * 100)} %`,
       set_appearance: `Darstellung: ${{ learning: 'Lernansicht', natural: 'Natürlich', digital: 'Digital' }[action.arguments.appearance]}`,
       isolate_regions: focusLabel, set_cut: 'Schnitt eingestellt', reset_view: 'Ansicht zurückgesetzt' };
-    return labels[action.name] + (action.arguments.region_ids?.length ? ': ' + action.arguments.region_ids.join(', ') : '');
+    const groups = action.selection_groups ?? [];
+    const groupNames = groups.map(group => group.name);
+    const notes = [...new Set([
+      ...groups.filter(group => group.approximation).map(group => `DKT-basierte Annäherung: ${group.description}`),
+      ...(action.selection_notes ?? []),
+    ])];
+    const regionNames = (action.arguments.region_ids ?? []).map(id => regionMap.get(id)?.name ?? id);
+    return labels[action.name] + (regionNames.length ? ': ' + (groupNames.length ? groupNames : regionNames).join(', ') : '')
+      + (notes.length ? '. ' + notes.join(' ') : '');
   },
 };
 if (loaded) attachViewer(assistantViewer);

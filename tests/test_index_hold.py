@@ -2,7 +2,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from main.gesture_control import IndexHold, PinchDrag
+from main.gesture_control import IndexHold, PinchDrag, LISTEN_HOLD_SECONDS
 from main.gesture_service import GestureService
 
 
@@ -18,17 +18,17 @@ def pointing_hand(scale=1, mirror=False):
 
 
 class IndexHoldTests(unittest.TestCase):
-    def test_continuous_half_second_then_immediate_release(self):
+    def test_configured_hold_then_immediate_release(self):
         gesture = IndexHold()
         hand = pointing_hand()
         self.assertFalse(gesture.update(hand,640,480,10))
-        self.assertFalse(gesture.update(hand,640,480,10.49))
-        self.assertTrue(gesture.update(hand,640,480,10.5))
+        self.assertFalse(gesture.update(hand,640,480,10 + LISTEN_HOLD_SECONDS - .01))
+        self.assertTrue(gesture.update(hand,640,480,10 + LISTEN_HOLD_SECONDS + .001))
         self.assertTrue(gesture.update(hand,640,480,12))
         self.assertFalse(gesture.update(None,640,480,12.05))
         self.assertFalse(gesture.update(hand,640,480,12.1))
-        self.assertFalse(gesture.update(hand,640,480,12.59))
-        self.assertTrue(gesture.update(hand,640,480,12.61))
+        self.assertFalse(gesture.update(hand,640,480,12.1 + LISTEN_HOLD_SECONDS - .01))
+        self.assertTrue(gesture.update(hand,640,480,12.1 + LISTEN_HOLD_SECONDS + .001))
 
     def test_interrupted_candidate_starts_delay_again(self):
         gesture = IndexHold()
@@ -36,8 +36,8 @@ class IndexHoldTests(unittest.TestCase):
         gesture.update(hand,640,480,0)
         gesture.update(None,640,480,.4)
         self.assertFalse(gesture.update(hand,640,480,.5))
-        self.assertFalse(gesture.update(hand,640,480,.99))
-        self.assertTrue(gesture.update(hand,640,480,1))
+        self.assertFalse(gesture.update(hand,640,480,.5 + LISTEN_HOLD_SECONDS - .01))
+        self.assertTrue(gesture.update(hand,640,480,.5 + LISTEN_HOLD_SECONDS + .001))
 
     def test_both_hands_and_scales(self):
         for mirror in (False,True):
@@ -45,7 +45,7 @@ class IndexHoldTests(unittest.TestCase):
                 gesture = IndexHold()
                 hand = pointing_hand(scale,mirror)
                 gesture.update(hand,640,480,0)
-                self.assertTrue(gesture.update(hand,640,480,.5))
+                self.assertTrue(gesture.update(hand,640,480,LISTEN_HOLD_SECONDS))
                 self.assertIsNone(PinchDrag().update(hand,640,480))
 
     def test_open_hand_pinch_downward_and_degenerate_are_rejected(self):
@@ -66,9 +66,9 @@ class IndexHoldTests(unittest.TestCase):
     def test_grab_blocks_and_resets_listen(self):
         gesture=IndexHold(); hand=pointing_hand()
         gesture.update(hand,640,480,0)
-        self.assertTrue(gesture.update(hand,640,480,.5))
-        self.assertFalse(gesture.update(hand,640,480,.6,blocked=True))
-        self.assertFalse(gesture.update(hand,640,480,.7))
+        self.assertTrue(gesture.update(hand,640,480,LISTEN_HOLD_SECONDS))
+        self.assertFalse(gesture.update(hand,640,480,LISTEN_HOLD_SECONDS + .1,blocked=True))
+        self.assertFalse(gesture.update(hand,640,480,LISTEN_HOLD_SECONDS + .2))
 
     def test_service_edges_staleness_and_stop(self):
         service=GestureService()

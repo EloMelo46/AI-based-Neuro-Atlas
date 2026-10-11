@@ -42,13 +42,13 @@ def main():
                 window.view = await import('/static/brain_viewer.js');
                 window.pose = () => view.camera.position.toArray();
             }""")
-            assert page.evaluate('view.assistantViewer.getState().loaded.length') == 38
+            assert page.evaluate('view.assistantViewer.getState().loaded.length') == 99
             assert not errors, errors
             assert not external, external
             output = ROOT / 'verification'
             output.mkdir(exist_ok=True)
             page.screenshot(path=str(output / 'gestures-ready.png'))
-            print('PASS: viewer, 38 meshes and gesture controls load entirely locally.', flush=True)
+            print('PASS: viewer, 98 solid regions and gesture controls load entirely locally.', flush=True)
             # The anterior RAS side (+Y) maps to world -Z; retain the oblique angle.
             def assert_front_view():
                 assert page.evaluate('view.camera.position.z < view.controls.target.z')
@@ -63,7 +63,10 @@ def main():
             before = page.evaluate('pose()')
             gestures.publish(None, True)
             page.wait_for_function("document.getElementById('gesture-status').textContent.includes('Sparmodus')")
-            assert page.evaluate('pose()') == before
+            # OrbitControls converts between Cartesian/spherical coordinates;
+            # non-integer GLB bounds can produce sub-picometre roundoff.
+            after_idle = page.evaluate('pose()')
+            assert all(abs(a - b) < 1e-6 for a, b in zip(after_idle, before)), (before, after_idle)
             gestures.publish(('grab_start', 0, 0), False)
             page.wait_for_function("document.getElementById('gesture-status').textContent.includes('Gegriffen')")
             target = page.evaluate('view.controls.target.toArray()')
@@ -86,7 +89,8 @@ def main():
             assert not page.locator('#auto-rotate').is_checked()
             grabbed = page.evaluate('pose()')
             page.wait_for_timeout(200)
-            assert page.evaluate('pose()') == grabbed
+            after_grab = page.evaluate('pose()')
+            assert all(abs(a - b) < 1e-6 for a, b in zip(after_grab, grabbed)), (grabbed, after_grab)
             gestures.publish(('grab_end', 0, 0), False)
             page.wait_for_function("document.getElementById('gesture-status').textContent.includes('Bereit')")
             assert page.locator('#auto-rotate').is_checked()

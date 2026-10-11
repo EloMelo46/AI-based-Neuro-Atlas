@@ -18,7 +18,8 @@ export function createMentionGlow(THREE, scene, regionMap, cutPlanes, requestRen
     const now = performance.now();
     for (const id of new Set(ids)) {
       const region = regionMap.get(id);
-      if (!region?.object || (region.optIn && !region.object.visible)) continue;
+      if (!region?.object || region.highlightable === false
+        || (region.optIn && (!region.highlighted || !region.object.visible))) continue;
       remove(id);
       const meshes = [];
       region.object.updateWorldMatrix(true, true);
@@ -78,7 +79,7 @@ export function createMentionGlow(THREE, scene, regionMap, cutPlanes, requestRen
     const styled = getAppearance() !== 'learning';
     for (const [id, entry] of active) {
       const elapsed = time - entry.started;
-      if (elapsed >= duration || (entry.region.optIn && !entry.region.object.visible)) {
+      if (elapsed >= duration || (entry.region.optIn && (!entry.region.highlighted || !entry.region.object.visible))) {
         remove(id);
         continue;
       }
@@ -87,6 +88,9 @@ export function createMentionGlow(THREE, scene, regionMap, cutPlanes, requestRen
       for (const { surface, overlay } of entry.meshes) {
         surface.updateWorldMatrix(true, false);
         overlay.matrix.copy(surface.matrixWorld);
+        // Preserve mentions of hidden regions, while avoiding draws for meshes
+        // entirely removed by the current anatomical clipping slab.
+        overlay.visible = surface.userData.cutCulled !== true;
         // With dense overlapping cortex surfaces, additive glow accumulates to
         // white. The new appearances use a bounded warm tint instead.
         overlay.material.blending = styled ? THREE.NormalBlending : THREE.AdditiveBlending;

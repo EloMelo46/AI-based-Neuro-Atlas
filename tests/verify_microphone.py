@@ -29,8 +29,9 @@ try:
     with patch.dict(os.environ, {'OPENAI_API_KEY': 'test-only'}), \
             patch('main.brain_assistant.transcribe_audio', side_effect=transcription), \
             patch('main.brain_assistant.stream_openai', side_effect=response_stream), \
+            patch('main.brain_assistant._api_key', side_effect=AssertionError('Live API disabled')), \
             sync_playwright() as playwright:
-        browser = playwright.chromium.launch(channel='chrome', headless=True,
+        browser = playwright.chromium.launch(executable_path=os.environ.get('CHROMIUM_PATH', '/usr/bin/chromium'), headless=True,
             args=['--enable-unsafe-swiftshader', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'])
         page = browser.new_page(viewport={'width': 1440, 'height': 1000})
         errors = []

@@ -52,14 +52,27 @@ const aliases = [
   [['WM-hypointensities'], ['Hypointensitäten der weißen Substanz', 'Hypointensität der weißen Substanz', 'white matter hypointensities']],
 ];
 
+// Restrict declension to known German anatomical adjectives. Whole-word
+// boundaries still prevent e.g. Thalamus from matching Hypothalamus.
+const adjectiveStems = ['verlängert', 'ober', 'unter', 'mittler', 'vorder', 'hinter',
+  'rostral', 'kaudal', 'anterior', 'posterior', 'inferior', 'superior', 'lateral', 'medial',
+  'frontal', 'temporal', 'okzipital', 'parietal', 'orbitofrontal', 'präfrontal', 'cingulär',
+  'entorhinal', 'parahippocampal', 'insulär', 'transversal', 'primär', 'motorisch',
+  'somatosensorisch', 'visuell', 'auditorisch', 'weiß', 'dritt', 'viert', 'erweitert',
+  'operculär', 'operkulär', 'orbital', 'triangulär', 'parazentral', 'präzentral', 'postzentral',
+  'pericalcarin', 'perikalcarin', 'perikalkarin', 'supramarginal', 'dorsolateral'];
+const adjectiveForms = new Map(adjectiveStems.flatMap(stem => ['e', 'en', 'er', 'em', 'es']
+  .map(ending => [stem + ending, stem])));
 function pattern(name) {
   return name.split(/(\s+|-)/u).map((part, index, parts) => {
     if (/^(?:\s+|-)$/u.test(part)) {
       // Allow ordinal forms with no space (3.Ventrikel) and typographic hyphens.
       return parts[index - 1]?.endsWith('.') ? '\\s*' : '[\\s\\-\u2010\u2011]+';
     }
-    return part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const stem = adjectiveForms.get(part.toLowerCase());
+    const escaped = (stem ?? part).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
       .replace(/ß/g, '(?:ß|ss)').replace(/ä/g, '(?:ä|ae)').replace(/ö/g, '(?:ö|oe)').replace(/ü/g, '(?:ü|ue)');
+    return stem ? `${escaped}e[nmrs]?` : escaped;
   }).join('');
 }
 
@@ -75,30 +88,59 @@ const suffixSide = new RegExp(`^\\s+(?:(${sidePhrase})(?!${wordBoundary})|(?:der
 function hemisphereFor(side) {
   const left = new RegExp(`(?<!${wordBoundary})${leftSide}(?!${wordBoundary})`, 'iu').test(side);
   const right = new RegExp(`(?<!${wordBoundary})${rightSide}(?!${wordBoundary})`, 'iu').test(side);
-  return left === right ? null : left ? 'Left-' : 'Right-';
+  return left === right ? null : left ? 'left' : 'right';
 }
 
-export function findRegionMentions(text, availableIds) {
+const manifestAliases = typeof document === 'undefined' ? {} :
+  JSON.parse(document.getElementById('region-aliases')?.textContent ?? '{}');
+function hemisphereOfId(id) {
+  if (/^Left-|(?:^|\.)lh[._]/.test(id)) return 'left';
+  if (/^Right-|(?:^|\.)rh[._]/.test(id)) return 'right';
+  return null;
+}
+
+// The manifest vocabulary is an immutable page snapshot. Reuse its compiled
+// matchers while speech cues are evaluated; a new catalog/ID set rebuilds them.
+const matcherCache = new WeakMap();
+function mentionMatchers(availableIds, selectionAliases) {
+  const key = availableIds.join('\0');
+  const cached = matcherCache.get(selectionAliases);
+  if (cached?.key === key) return cached.matchers;
+  const resolve = ids => [...new Set(ids.flatMap(id => selectionAliases[id] ?? [id]))];
+  const entries = [...Object.entries(selectionAliases).map(([name, ids]) => [ids, [name]]),
+    ...aliases.map(([ids, names]) => [resolve(ids), names]),
+    ...availableIds.map(id => [[id], [id]])];
+  const matchers = entries.flatMap(([ids, names]) => names.map(name => ({ids, name,
+    regex: new RegExp(`(?<!${wordBoundary})${pattern(name)}(?!${wordBoundary})`, 'giu')})));
+  matcherCache.set(selectionAliases, { key, matchers });
+  return matchers;
+}
+
+export function findRegionMentions(text, availableIds, selectionAliases = manifestAliases) {
   const available = new Set(availableIds);
-  const entries = [...aliases, ...availableIds.map(id => [[id], [id]])];
+  // Keep established German inflections while resolving legacy labels to the
+  // same canonical manifest IDs used by the assistant and individual meshes.
   const matches = [];
-  for (const [ids, names] of entries) {
-    for (const name of names) {
-      const regex = new RegExp(`(?<!${wordBoundary})${pattern(name)}(?!${wordBoundary})`, 'giu');
-      for (const match of text.matchAll(regex)) {
-        let start = match.index;
-        let end = start + match[0].length;
-        const before = text.slice(0, start);
-        const after = text.slice(end);
-        const prefix = before.match(prefixSide);
-        const suffix = after.match(suffixSide);
-        const hemisphere = hemisphereFor(prefix?.[1] || suffix?.slice(1).find(Boolean) || '');
-        const regionIds = ids.filter(id => available.has(id) &&
-          (!hemisphere || !/^(Left|Right)-/.test(id) || id.startsWith(hemisphere)));
-        if (prefix) start -= prefix[0].length;
-        if (suffix) end += suffix[0].length;
-        matches.push({ start, end, cueStart: match.index, regionIds });
-      }
+  for (const { ids, name, regex } of mentionMatchers(availableIds, selectionAliases)) {
+    for (const match of text.matchAll(regex)) {
+      let start = match.index;
+      let end = start + match[0].length;
+      const before = text.slice(0, start);
+      const after = text.slice(end);
+      const prefix = before.match(prefixSide);
+      const suffix = after.match(suffixSide);
+      const side = prefix?.[1] || suffix?.slice(1).find(Boolean) || '';
+      const hemisphere = hemisphereFor(side);
+      // Broca/Wernicke aliases default to the dominant left hemisphere.
+      // An explicit right/bilateral qualifier selects the catalog variant
+      // before filtering, rather than filtering the default left set away.
+      const variant = hemisphere === 'left' ? 'links' : hemisphere === 'right' ? 'rechts' : 'beidseitig';
+      const specified = side ? selectionAliases[`${name} ${variant}`] ?? ids : ids;
+      const regionIds = specified.filter(id => available.has(id) &&
+        (!hemisphere || !hemisphereOfId(id) || hemisphereOfId(id) === hemisphere));
+      if (prefix) start -= prefix[0].length;
+      if (suffix) end += suffix[0].length;
+      matches.push({ start, end, cueStart: match.index, regionIds });
     }
   }
   // Prefer the longest anatomical term over a nested generic name (e.g. Ventrikel).

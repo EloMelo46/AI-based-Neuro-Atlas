@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Neuro Atlas
+Comment=Lokaler Gehirnviewer mit Gestensteuerung und KI-Assistenz
+Exec=/bin/bash "/ABSOLUTER/PROJEKTPFAD/start_neuro_atlas.sh"
+Path=/ABSOLUTER/PROJEKTPFAD
+Icon=/ABSOLUTER/PROJEKTPFAD/static/favicon.svg
+Terminal=false
+Categories=Education;
+StartupNotify=true

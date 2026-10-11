@@ -17,12 +17,26 @@ const CUT_COLORS = {
   'WM-hypointensities': 0xbeb49f,
 };
 
-export function naturalCutColor(id) {
-  const name = id.replace(/^(Left|Right)-/, '');
-  if (name.startsWith('CC_')) return 0xdfd4bd;
+export function naturalCutColor(id, category = '') {
+  const name = id.split('.').at(-1).replace(/^(Left|Right)[-_]/i, '');
+  if (category === 'cortex' || id.startsWith('cortex.dkt.')) return CUT_COLORS['Cerebral-Cortex'];
+  if (name.startsWith('CC_') || /corpus.?callosum/i.test(name)) return 0xdfd4bd;
   // Fluid spaces are deliberately cooler than tissue.
-  if (/Ventricle|Inf-Lat-Vent|^CSF$/.test(name)) return 0x8c9c9d;
-  return CUT_COLORS[name] ?? 0xc3aa9c;
+  if (category === 'ventricular_system' || category === 'csf' || /ventric|Inf-Lat-Vent|^CSF$/i.test(id)) return 0x8c9c9d;
+  if (id === 'subcortex.brainstem.residual') return CUT_COLORS['Brain-Stem'];
+  if (/midbrain|pons|medulla|peduncle/i.test(name)) return CUT_COLORS['Brain-Stem'];
+  if (/hypothalamus|claustrum/i.test(name)) return CUT_COLORS.VentralDC;
+  if (/pituitary|pineal|hypophyse|epiphyse|infundibulum/i.test(name)) return 0xbf9990;
+  const normalized = name.replace(/^(lh|rh)_/, '').toLowerCase().replaceAll('-', '_');
+  const atlasName = {
+    cerebral_white_matter: 'Cerebral-White-Matter',
+    cerebellar_white_matter: 'Cerebellum-White-Matter',
+    cerebellar_cortex: 'Cerebellum-Cortex', accumbens: 'Accumbens-area',
+    thalamus: 'Thalamus', hippocampus: 'Hippocampus', amygdala: 'Amygdala',
+    caudate: 'Caudate', putamen: 'Putamen', pallidum: 'Pallidum',
+    ventraldc: 'VentralDC', wm_hypointensities: 'Cerebral-White-Matter',
+  }[normalized];
+  return CUT_COLORS[atlasName ?? name] ?? 0xc3aa9c;
 }
 
 // Bake low-frequency tissue variation once per geometry, not per fragment/frame.
@@ -45,12 +59,14 @@ function tissueNoise(x, y, z) {
         mix(tissueHash(ix, iy + 1, iz + 1), tissueHash(ix + 1, iy + 1, iz + 1), fx), fy), fz);
 }
 
-export function prepareTissueVariation(THREE, geometry) {
+export function prepareTissueVariation(THREE, geometry, anatomicalMatrix = new THREE.Matrix4()) {
   if (preparedGeometries.has(geometry)) return;
   const position = geometry.getAttribute('position');
   const values = new Float32Array(position.count);
+  const point = new THREE.Vector3();
   for (let i = 0; i < position.count; i++) {
-    const x = position.getX(i), y = position.getY(i), z = position.getZ(i);
+    point.fromBufferAttribute(position, i).applyMatrix4(anatomicalMatrix);
+    const { x, y, z } = point;
     values[i] = 0.65 * tissueNoise(x * 0.09, y * 0.09, z * 0.09)
       + 0.35 * tissueNoise(x * 0.38, y * 0.38, z * 0.38);
   }

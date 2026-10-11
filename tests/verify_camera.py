@@ -1,5 +1,6 @@
 """Real viewer camera regression; no billable OpenAI requests."""
 import logging
+import os
 import sys
 from pathlib import Path
 from threading import Thread
@@ -22,8 +23,9 @@ def main():
     try:
         with patch('main.brain_assistant._api_key', side_effect=AssertionError('Live API disabled')), \
                 sync_playwright() as playwright:
-            browser = playwright.chromium.launch(channel='chrome', headless=True,
-                                                 args=['--enable-unsafe-swiftshader'])
+            browser = playwright.chromium.launch(
+                executable_path=os.environ.get('CHROMIUM_PATH', '/usr/bin/chromium'),
+                headless=True, args=['--enable-unsafe-swiftshader'])
             page = browser.new_page(viewport={'width': 1440, 'height': 1000})
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
@@ -37,6 +39,7 @@ def main():
             page.route('**/api/assistant/config', lambda route: route.fulfill(json={'configured': True}))
             page.goto(f'http://127.0.0.1:{server.server_port}')
             page.locator('#auto-rotate').uncheck()
+            page.wait_for_function("!document.getElementById('reset').disabled", timeout=120000)
             page.evaluate("""async () => {
               window.view = await import('/static/brain_viewer.js');
               window.THREE = await import('three');
@@ -49,7 +52,8 @@ def main():
                 return JSON.stringify(pose);
               };
             }""")
-            assert len(page.evaluate('viewer.getState().loaded')) == 38
+            assert len(page.evaluate('viewer.getState().loaded')) == 99
+            assert page.locator('#status').inner_text() == '102 von 102 Regionen geladen'
             assert page.locator('#info').is_visible() and page.locator('#assistant-panel').is_visible()
             assert not errors, errors
             output = PROJECT_ROOT / 'verification'
@@ -70,14 +74,14 @@ def main():
                 page.wait_for_timeout(150)
                 assert page.evaluate("""() => {
                   const before = JSON.stringify(cameraState());
-                  viewer.execute({name:'isolate_regions', arguments:{region_ids:['Left-Thalamus', 'Right-Thalamus']}});
+                  viewer.execute({name:'isolate_regions', arguments:{region_ids:['subcortex.aseg.lh_thalamus', 'subcortex.aseg.rh_thalamus']}});
                   const after = JSON.stringify(cameraState());
-                  viewer.execute({name:'highlight_regions', arguments:{region_ids:['Left-Hippocampus']}});
+                  viewer.execute({name:'highlight_regions', arguments:{region_ids:['subcortex.aseg.lh_hippocampus']}});
                   return before === after && before === JSON.stringify(cameraState());
                 }"""), 'A highlight changed the current camera or rotation setting'
             position = page.evaluate('view.camera.position.toArray()')
-            page.wait_for_timeout(300)
-            assert page.evaluate('view.camera.position.toArray()') != position, 'Rotation did not continue'
+            page.wait_for_function('(before) => JSON.stringify(view.camera.position.toArray()) !== JSON.stringify(before)',
+                                   arg=position, timeout=5000)
             print('PASS: focus and legacy highlight preserve camera, zoom, pan and ongoing rotation.', flush=True)
 
             # Projection checks include every corner of the complete cut face.
@@ -99,12 +103,18 @@ def main():
                   face.max[name] = cutBounds.min[name] + size * cuts[name][1] / 100;
                 }
                 face.min[axis] = face.max[axis] = face[bound][axis];
+                const projectedBounds = new THREE.Box3();
                 for (const x of [face.min.x,face.max.x]) for (const y of [face.min.y,face.max.y]) for (const z of [face.min.z,face.max.z]) {
                   const projected = new THREE.Vector3(x,y,z).applyMatrix4(brain.matrixWorld).project(camera);
+                  projectedBounds.expandByPoint(projected);
                   if (Math.abs(projected.x) > 1.001 || Math.abs(projected.y) > 1.001 || Math.abs(projected.z) > 1.001) {
                     throw new Error('Cut face extends outside viewport: ' + axis + ' ' + projected.toArray());
                   }
                 }
+                const extent = projectedBounds.getSize(new THREE.Vector3());
+                if (Math.max(extent.x,extent.y) < 1.90) throw new Error('Cut leaves too much unused viewport');
+                const center = projectedBounds.getCenter(new THREE.Vector3());
+                if (Math.abs(center.x)>0.001 || Math.abs(center.y)>0.001) throw new Error('Cut is not centered');
               };
             }""")
             for axis in ('x', 'y', 'z'):
@@ -126,7 +136,7 @@ def main():
                     # Highlighting clears cuts, preserves the pose and resumes rotation.
                     assert page.evaluate("""() => {
                       const before = cameraPose();
-                      viewer.execute({name:'isolate_regions',arguments:{region_ids:['Right-Thalamus']}});
+                      viewer.execute({name:'isolate_regions',arguments:{region_ids:['subcortex.aseg.rh_thalamus']}});
                       return before === cameraPose() && cameraState().rotating &&
                         Object.values(viewer.getState().cuts).every(([min,max]) => min === 0 && max === 100);
                     }""")
@@ -179,8 +189,8 @@ def main():
                       if (cameraState().rotating !== rotating) throw new Error('Prior rotation choice was not restored');
                     }""", {'rotating': rotating, 'removal': removal})
             before_rotation = page.evaluate('view.camera.position.toArray()')
-            page.wait_for_timeout(300)
-            assert page.evaluate('view.camera.position.toArray()') != before_rotation, 'Resumed rotation did not render'
+            page.wait_for_function('(before) => JSON.stringify(view.camera.position.toArray()) !== JSON.stringify(before)',
+                                   arg=before_rotation, timeout=5000)
             # Turning rotation on and then off while inspecting a cut is an
             # explicit user choice; clearing that cut must not override it.
             page.evaluate("viewer.execute({name:'set_cut',arguments:{axis:'z',min:0,max:70}})")
@@ -204,6 +214,20 @@ def main():
             }""")
             page.wait_for_timeout(400)
             page.evaluate("checkCut('y','max')")
+            # Fullscreen changes the available aspect ratio. Keep the complete
+            # cut centered with a small margin, then restore the panel layout.
+            page.set_viewport_size({'width':1920,'height':1080})
+            page.wait_for_timeout(300)
+            page.evaluate("checkCut('y','max')")
+            page.screenshot(path=str(output/'camera-cut-desktop-fitted.png'))
+            page.locator('#fullscreen-toggle').click()
+            page.wait_for_function("document.body.classList.contains('viewer-fullscreen')")
+            page.wait_for_timeout(350)
+            page.evaluate("checkCut('y','max')")
+            page.screenshot(path=str(output/'camera-cut-fullscreen-fitted.png'))
+            page.evaluate('document.exitFullscreen()')
+            page.wait_for_timeout(350)
+            page.evaluate("checkCut('y','max')")
             page.set_viewport_size({'width': 700, 'height': 1000})
             page.wait_for_timeout(300)
             page.evaluate("""() => {
@@ -216,6 +240,7 @@ def main():
             print('PASS: slab sides, manual sliders, combined cuts, damping and narrow viewport.', flush=True)
     finally:
         server.shutdown()
+        server.server_close()
 
 
 if __name__ == '__main__':

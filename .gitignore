@@ -12,7 +12,7 @@ __pycache__/
 htmlcov/
 *.log
 
-# Local credentials and certificates, including copies outside .local/.
+# Local credentials and secrets
 .env
 .env.*
 !.env.example
@@ -22,14 +22,31 @@ htmlcov/
 *.cer
 *.p12
 *.pfx
+/.aws/
 
-# Generated verification output and full-resolution source geometry.
-verification/
-/export_all_areas/
+/neuro-atlas.desktop
+/verification
+/tests
 
-# Existing local-only mesh preparation and sample-dependent speech check.
-/tests/verify_speech.py
-/main/prepare_meshes.py
+# Personal export folders for segmentation results and 3D models
+/segmentation_export/
+
+*.nii
+*.nii.gz
+*.mgz
+*.mgh
+*.dcm
+*.dicom
+
+*.glb
+*.gltf
+*.obj
+*.ply
+*.stl
+
+/docs/geometry-validation.md
+/docs/source-mask-validation.md
+/docs/solid-migration.md
 
 # Downloaded MediaPipe model (see README).
 /models/*.task
