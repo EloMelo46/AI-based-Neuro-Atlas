@@ -41,17 +41,20 @@ export function followSpeechMentions(audio, timeline, { onCue }) {
   const events = [];
   function listen(name, fn) { audio.addEventListener(name, fn); events.push([name, fn]); }
   function halt() { playing = false; clearInterval(timer); timer = null; }
-  function update() {
-    if (!playing || audio.paused || audio.seeking || audio.ended || audio.readyState < 2) return;
-    const position = audio.currentTime;
+  function deliver(position) {
     const due = new Set();
     getTimeline().forEach((cue, index) => {
       if (seen.has(index) || cue.at > position) return;
       seen.add(index);
-      // A forward seek must not replay old mentions in a burst.
-      if (position - cue.at <= 1) cue.regionIds.forEach(id => due.add(id));
+      // Slow rendering or a corrected duration must not silently drop a mention.
+      // Discarding skipped cues belongs to explicit seeking, not normal playback.
+      cue.regionIds.forEach(id => due.add(id));
     });
     if (due.size) onCue([...due]);
+  }
+  function update() {
+    if (!playing || audio.paused || audio.seeking || audio.ended || audio.readyState < 2) return;
+    deliver(audio.currentTime);
   }
   function resume() {
     if (audio.paused || audio.seeking || audio.ended) return;
@@ -64,9 +67,14 @@ export function followSpeechMentions(audio, timeline, { onCue }) {
     listen('timeupdate', update);
     listen('pause', halt);
     listen('waiting', halt);
-    listen('ended', halt);
+    listen('ended', () => { if (!audio.seeking) deliver(audio.currentTime); halt(); });
     listen('seeking', () => { halt(); seen.clear(); });
-    listen('seeked', resume);
+    listen('seeked', () => {
+      getTimeline().forEach((cue, index) => {
+        if (cue.at < audio.currentTime - 1) seen.add(index);
+      });
+      resume();
+    });
   }
   return () => { halt(); events.forEach(([name, fn]) => audio.removeEventListener(name, fn)); };
 }

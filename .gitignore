@@ -30,6 +30,7 @@ htmlcov/
 
 # Personal export folders for segmentation results and 3D models
 /segmentation_export/
+/original_mri/
 
 *.nii
 *.nii.gz

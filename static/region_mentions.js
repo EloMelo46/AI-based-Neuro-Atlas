@@ -163,7 +163,8 @@ export function narrationText(parts) {
       }
     }
     return chars.join('');
-  }).join('\n').replace(/\[([^\]]+)\]\(https?:\/\/[^)]+\)/g, '$1')
+  }).join('\n').replace(/\uE200[^\uE201]*\uE201/gu, '')
+    .replace(/\[([^\]]+)\]\(https?:\/\/[^)]+\)/g, '$1')
     .replace(/https?:\/\/\S+/g, '').replace(/\*\*|__|`/g, '').trim();
 }
 

@@ -7,8 +7,6 @@ import { createCutCulling } from './cut_culling.js';
 import { createCutDepthPrepass } from './cut_depth_prepass.js';
 import { createMentionGlow } from './mention_glow.js';
 import { createBrainAppearance } from './brain_appearance.js';
-import { attachGestureControl } from './gesture_control.js';
-import { attachViewer } from './assistant_bridge.js';
 
 const status = document.getElementById('status');
 const errors = document.getElementById('errors');
@@ -60,7 +58,7 @@ function requestRender() {
   framePending = true;
   requestAnimationFrame(time => {
     framePending = false;
-    if (document.hidden) { lastFrameTime = null; return; }
+    if (document.hidden || document.body.dataset.viewer === 'mri') { lastFrameTime = null; return; }
     const delta = lastFrameTime === null ? 0 : Math.min((time - lastFrameTime) / 1000, 0.1);
     lastFrameTime = time;
     const rotating = rotationToggle.checked && !interacting;
@@ -421,8 +419,11 @@ async function loadRegion(region) {
   updateRegionCount();
 }
 
-document.getElementById('reset').addEventListener('click', fitCamera);
+document.getElementById('reset').addEventListener('click', () => {
+  if (document.body.dataset.viewer !== 'mri') fitCamera();
+});
 new ResizeObserver(() => {
+  if (!sceneHost.clientWidth || !sceneHost.clientHeight) return;
   const aspect = sceneHost.clientWidth / Math.max(1, sceneHost.clientHeight);
   // Preserve the zoom relative to the smaller viewport dimension when a panel opens.
   const halfFov = THREE.MathUtils.degToRad(camera.fov) / 2;
@@ -644,18 +645,13 @@ export const assistantViewer = {
       isolate_regions: focusLabel, set_cut: 'Schnitt eingestellt', reset_view: 'Ansicht zurückgesetzt' };
     const groups = action.selection_groups ?? [];
     const groupNames = groups.map(group => group.name);
-    const notes = [...new Set([
-      ...groups.filter(group => group.approximation).map(group => `DKT-basierte Annäherung: ${group.description}`),
-      ...(action.selection_notes ?? []),
-    ])];
+    const notes = [...new Set(action.selection_notes ?? [])];
     const regionNames = (action.arguments.region_ids ?? []).map(id => regionMap.get(id)?.name ?? id);
     return labels[action.name] + (regionNames.length ? ': ' + (groupNames.length ? groupNames : regionNames).join(', ') : '')
       + (notes.length ? '. ' + notes.join(' ') : '');
   },
 };
-if (loaded) attachViewer(assistantViewer);
-
-if (loaded) attachGestureControl({
+export const gestureContext = {
   camera, controls, requestRender,
   onGrab() {
     rotationToggle.checked = false;
@@ -669,4 +665,4 @@ if (loaded) attachGestureControl({
     lastFrameTime = null;
     requestRender();
   },
-});
+};

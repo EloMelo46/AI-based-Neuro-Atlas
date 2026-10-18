@@ -287,7 +287,9 @@ export function createBrainAppearance(THREE, scene, regions, requestRender, onSt
     applyStyle();
     onStyleChange?.();
   }
-  select.addEventListener('change', () => setStyle(select.value));
+  select.addEventListener('change', () => {
+    if (Object.hasOwn(STYLES, select.value)) setStyle(select.value);
+  });
   applyStyle();
   return {
     createMaterial, applyRegion, setStyle, getStyle: () => current,

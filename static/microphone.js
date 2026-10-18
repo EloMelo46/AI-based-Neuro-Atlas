@@ -1,7 +1,8 @@
-export function initMicrophone({ button, status, setBusy, onText, onError, onStart, onRecordingChange }) {
+export function initMicrophone({ button, status, setBusy, onText, onError, onStart, onRecordingChange, onPhaseChange }) {
   let available = false;
   let capture = null;
   let recordingShown = false;
+  let shownPhase = null;
   const supported = window.isSecureContext && navigator.mediaDevices?.getUserMedia && window.MediaRecorder;
   const hint = document.getElementById('assistant-mic-hint');
   const unavailableReason = !window.isSecureContext
@@ -19,6 +20,10 @@ export function initMicrophone({ button, status, setBusy, onText, onError, onSta
     button.disabled = !supported || (phase === 'idle' ? !available : !recording);
     button.textContent = recording ? 'Stoppen & senden' : 'Mikrofon starten';
     button.setAttribute('aria-pressed', String(recording));
+    if (shownPhase !== phase) {
+      shownPhase = phase;
+      onPhaseChange?.(phase, capture?.source);
+    }
     if (recordingShown !== recording) {
       recordingShown = recording;
       onRecordingChange?.(recording);
@@ -85,7 +90,7 @@ export function initMicrophone({ button, status, setBusy, onText, onError, onSta
         if (current.cancelled) return;
         bytes += event.data.size;
         if (bytes <= 10 * 1024 * 1024) chunks.push(event.data);
-        else fail(current, 'Aufnahme zu groß. Bitte kürzer sprechen.');
+        else fail(current, 'Aufnahme zu gross. Bitte kürzer sprechen.');
       };
       recorder.onerror = () => fail(current, 'Mikrofonaufnahme fehlgeschlagen. Bitte erneut versuchen.');
       stream.getAudioTracks().forEach(track => track.addEventListener('ended', () => {
@@ -99,7 +104,7 @@ export function initMicrophone({ button, status, setBusy, onText, onError, onSta
         status.textContent = 'Sprache wird erkannt …';
         const timeout = setTimeout(() => current.controller.abort(), 90000);
         try {
-          if (!bytes || bytes > 10 * 1024 * 1024) throw new Error('Aufnahme leer oder zu groß.');
+          if (!bytes || bytes > 10 * 1024 * 1024) throw new Error('Aufnahme leer oder zu gross.');
           const baseType = mime.split(';')[0];
           const form = new FormData();
           form.append('audio', new Blob(chunks, { type: baseType }), baseType === 'audio/mp4' ? 'speech.mp4' : 'speech.webm');
@@ -141,5 +146,7 @@ export function initMicrophone({ button, status, setBusy, onText, onError, onSta
     if (document.hidden) stop('gesture', true);
   });
   refresh();
-  return { start, stop, setAvailable(value) { available = value; refresh(); } };
+  return { start, stop,
+    stopCurrent() { if (capture) stop(capture.source, capture.phase !== 'recording'); },
+    setAvailable(value) { available = value; refresh(); } };
 }

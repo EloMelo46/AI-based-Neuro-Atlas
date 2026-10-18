@@ -23,7 +23,7 @@ models, while Three.js handles rendering in the browser.
   visibility and opacity.
 - **Slices:** Sagittal, coronal, and axial slices; validated models support
   filled cross-sections.
-- **Appearance:** Learning view, natural tissue rendering, or a digital hologram.
+- **Appearance:** Learning view, natural tissue rendering, digital hologram or original MRT scan.
   **Fullscreen** hides the control panels; **Escape** brings them back.
 - **AI assistant:** Ask anatomical questions by text or microphone and control
   the view, for example, “Show and explain the hippocampus.” Answers can be read
@@ -59,7 +59,7 @@ cross-sections remain unfilled.
 
 Requirements: Raspberry Pi OS **64-bit with desktop**, Python **3.11 or later**,
 and Chromium with WebGL. The gesture control used here also requires a camera,
-Picamera2, and MediaPipe.
+Picamera2, and MediaPipe for hand landmarks detection.
 
 From the project directory:
 

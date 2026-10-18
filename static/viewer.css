@@ -112,3 +112,23 @@ body.assistant-listening #scene canvas {
 
 /* Override pointer/grab/text cursors too, including controls in fullscreen. */
 body.cursor-idle, body.cursor-idle * { cursor: none !important; }
+
+/* A small composited indicator stays visible with the panels hidden. It does
+   not filter or redraw the MRI canvas while the microphone is recording. */
+#voice-feedback { position: fixed; z-index: 110; bottom: 26px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 14px; max-width: calc(100vw - 28px); box-sizing: border-box; padding: 12px 16px; border: 1px solid #8de2d380; border-radius: 16px; background: #152b2b; box-shadow: 0 5px 22px #0008; }
+#voice-feedback strong { display: block; color: #c4fff0; font-size: 14px; }
+#voice-feedback small { display: block; margin-top: 4px; color: #b6ceca; font-size: 11px; }
+#voice-feedback button { white-space: nowrap; min-height: 36px; font-size: 12px; cursor: pointer !important; }
+.voice-indicator { display: flex; align-items: center; gap: 3px; height: 24px; }
+.voice-indicator i { display: block; width: 3px; height: 7px; border-radius: 4px; background: #8de2d3; }
+#voice-feedback[data-phase="recording"] .voice-indicator i { height: 22px; animation: voice-wave 1s ease-in-out infinite alternate; }
+.voice-indicator i:nth-child(2) { animation-delay: -.3s !important; }
+.voice-indicator i:nth-child(3) { animation-delay: -.6s !important; }
+.voice-indicator i:nth-child(4) { animation-delay: -.1s !important; }
+.voice-indicator i:nth-child(5) { animation-delay: -.8s !important; }
+@keyframes voice-wave { from { transform: scaleY(.3); } to { transform: scaleY(1); } }
+@media (prefers-reduced-motion: reduce) { #voice-feedback .voice-indicator i { animation: none !important; } }
+@media (max-width: 900px) {
+  #voice-feedback { bottom: calc(88px + env(safe-area-inset-bottom)); width: max-content; gap: 10px; padding: 10px; }
+  body.viewer-fullscreen #voice-feedback { bottom: 16px; }
+}

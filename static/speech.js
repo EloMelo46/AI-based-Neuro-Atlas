@@ -1,7 +1,8 @@
 import { narrationSegments } from './region_mentions.js';
+import { createSentenceBatches } from './sentence_batches.js';
 import { DEFAULT_GLOW_OFFSET_SECONDS, estimatedRegionMentions, followSpeechMentions } from './speech_timing.js';
 
-// Continuous speech with independent visual cues. Prefetch only for long answers.
+// Stream sentence batches with independent visual cues and one block of lookahead.
 export function initSpeech({ onError = () => {}, onCue = () => {}, onStop = () => {}, getRegionIds = () => [],
   glowOffsetSeconds = DEFAULT_GLOW_OFFSET_SECONDS } = {}) {
   const audio = document.getElementById('assistant-audio');
@@ -10,9 +11,12 @@ export function initSpeech({ onError = () => {}, onCue = () => {}, onStop = () =
   let blobURL = null;
   const requests = new Set();
   const readers = new Set();
+  let session = null;
 
   function release() {
     generation++;
+    session?.resolve();
+    session = null;
     for (const entry of requests) {
       clearTimeout(entry.timeout);
       entry.controller.abort();
@@ -163,41 +167,83 @@ export function initSpeech({ onError = () => {}, onCue = () => {}, onStop = () =
     return entry;
   }
 
-  async function speak(parts, voice) {
+  function begin(voice) {
     stop();
     const current = generation;
-    const segments = narrationSegments(parts, getRegionIds());
-    if (!segments.length) return;
-    let pending = prepare(segments[0], voice, false);
-    try {
-      for (let index = 0; index < segments.length; index++) {
-        const entry = pending;
-        if (status) status.hidden = false;
-        const { response, error } = await entry.ready;
-        if (current !== generation) return;
-        if (status) status.hidden = true;
-        if (error) throw error;
-        pending = index + 1 < segments.length ? prepare(segments[index + 1], voice, true) : null;
-        try { await playResponse(response, entry, current); }
-        finally {
-          clearTimeout(entry.timeout);
-          entry.controller.abort();
-          requests.delete(entry);
-        }
-        if (current !== generation) return;
-      }
-      // Let the final mention finish its glow after natural audio completion.
-      if (current === generation) release();
-    } catch (error) {
+    const queue = [];
+    let running = false, finished = false, finalPart = null;
+    const done = new Promise(resolve => { session = { resolve }; });
+    function fail(error) {
       if (current !== generation) return;
       stop();
       onError(error.name === 'AbortError'
         ? 'Zeitlimit bei der Sprachausgabe. Die Textantwort bleibt verfügbar.' : error.message);
     }
+    function prefetch() {
+      // Bound network and memory usage to the current and next audio block.
+      queue.slice(0, 2).forEach((item, index) => {
+        if (!item.entry) item.entry = prepare(item.segment, voice, index > 0);
+      });
+    }
+    async function pump() {
+      if (running || current !== generation) return;
+      running = true;
+      try {
+        while (queue.length && current === generation) {
+          prefetch();
+          const { entry } = queue[0];
+          if (status) status.hidden = false;
+          const { response, error } = await entry.ready;
+          if (current !== generation) return;
+          if (status) status.hidden = true;
+          if (error) throw error;
+          try { await playResponse(response, entry, current); }
+          finally {
+            clearTimeout(entry.timeout);
+            entry.controller.abort();
+            requests.delete(entry);
+          }
+          if (current !== generation) return;
+          queue.shift();
+        }
+        if (finished && current === generation) release();
+      } catch (error) { fail(error); }
+      finally { running = false; }
+    }
+    const batches = createSentenceBatches((text, span) => {
+      let citations = [];
+      if (finalPart) {
+        const start = Array.from(finalPart.text.slice(0, span.start)).length;
+        const end = start + Array.from(text).length;
+        citations = finalPart.citations.filter(c => c.start_index < end && c.end_index > start)
+          .map(c => ({ ...c, start_index: Math.max(0, c.start_index - start), end_index: Math.min(end, c.end_index) - start }));
+      }
+      queue.push(...narrationSegments([{text, citations}], getRegionIds()).map(segment => ({ segment, entry: null })));
+      prefetch();
+      void pump();
+    });
+    return {
+      push(delta) { if (current === generation) batches.push(delta); },
+      finish(parts) {
+        if (current !== generation) return done;
+        let offset = 0;
+        finalPart = { text: parts.map(p => p.text).join('\n'), citations: [] };
+        for (const part of parts) {
+          finalPart.citations.push(...(part.citations || []).map(c => ({...c,
+            start_index: c.start_index + offset, end_index: c.end_index + offset })));
+          offset += Array.from(part.text).length + 1;
+        }
+        try { batches.finish(finalPart.text); finished = true; void pump(); }
+        catch (error) { fail(error); }
+        return done;
+      },
+    };
   }
+
+  function speak(parts, voice) { return begin(voice).finish(parts); }
 
   document.getElementById('assistant-speak').addEventListener('change', stop);
   document.getElementById('assistant-voice').addEventListener('change', stop);
   window.addEventListener('pagehide', stop);
-  return { speak, stop };
+  return { speak, begin, stop };
 }

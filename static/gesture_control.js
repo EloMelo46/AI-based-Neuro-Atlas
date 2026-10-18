@@ -1,18 +1,16 @@
-import * as THREE from 'three';
-
 export const ROTATION_SENSITIVITY = 1.0;
 
 // Change the orbit directly, retaining target, zoom and anatomical cut planes.
 export function rotateView(camera, controls, dx, dy) {
-  const up = new THREE.Quaternion().setFromUnitVectors(camera.up.clone().normalize(), new THREE.Vector3(0, 1, 0));
+  const up = camera.quaternion.clone().identity().setFromUnitVectors(camera.up.clone().normalize(), camera.up.clone().set(0, 1, 0));
   const offset = camera.position.clone().sub(controls.target).applyQuaternion(up);
-  const spherical = new THREE.Spherical().setFromVector3(offset);
-  spherical.theta -= dx * 2 * Math.PI * ROTATION_SENSITIVITY;
-  spherical.phi -= dy * 2 * Math.PI * ROTATION_SENSITIVITY;
-  spherical.theta = THREE.MathUtils.clamp(spherical.theta, controls.minAzimuthAngle, controls.maxAzimuthAngle);
-  spherical.phi = THREE.MathUtils.clamp(spherical.phi, controls.minPolarAngle, controls.maxPolarAngle);
-  spherical.makeSafe();
-  offset.setFromSpherical(spherical).applyQuaternion(up.invert());
+  const radius = offset.length();
+  const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+  let theta = Math.atan2(offset.x, offset.z) - dx * 2 * Math.PI * ROTATION_SENSITIVITY;
+  let phi = (radius ? Math.acos(clamp(offset.y / radius, -1, 1)) : 0) - dy * 2 * Math.PI * ROTATION_SENSITIVITY;
+  theta = clamp(theta, controls.minAzimuthAngle, controls.maxAzimuthAngle);
+  phi = clamp(clamp(phi, controls.minPolarAngle, controls.maxPolarAngle), 1e-6, Math.PI - 1e-6);
+  offset.set(radius * Math.sin(phi) * Math.sin(theta), radius * Math.cos(phi), radius * Math.sin(phi) * Math.cos(theta)).applyQuaternion(up.invert());
   camera.position.copy(controls.target).add(offset);
   controls.update();
 }
@@ -92,14 +90,20 @@ export function createListenReceiver({ start, end, cancel }) {
   };
 }
 
-export function attachGestureControl({ camera, controls, requestRender, onGrab, onRelease }) {
+export function attachGestureControl({ camera, controls, requestRender, onGrab, onRelease, mriViewer, getMeshControls }) {
   const label = document.getElementById('gesture-status');
   const toggle = document.getElementById('gesture-enabled');
   const preview = document.getElementById('gesture-preview');
   const image = document.getElementById('gesture-image');
   let enabledBeforeGrab = true;
+  let gestureState = null;
+  let mriGrab = false;
   const receiver = createGestureReceiver({
     start() {
+      mriGrab = mriViewer?.isActive() ?? false;
+      if (mriGrab) { mriViewer.gestureStart(gestureState); return; }
+      if (getMeshControls) ({ camera, controls, requestRender, onGrab, onRelease } = getMeshControls() ?? {});
+      if (!controls) return;
       // Drain outstanding mouse damping before taking over the same camera.
       const damping = controls.enableDamping;
       controls.enableDamping = false;
@@ -109,8 +113,14 @@ export function attachGestureControl({ camera, controls, requestRender, onGrab, 
       controls.enabled = false;
       onGrab();
     },
-    move(dx, dy) { rotateView(camera, controls, dx, dy); requestRender(); },
+    move(dx, dy) {
+      if (mriGrab) { mriViewer.gestureMove(dx, dy, gestureState); return; }
+      if (!controls) return;
+      rotateView(camera, controls, dx, dy); requestRender();
+    },
     end() {
+      if (mriGrab) { mriViewer.gestureEnd(); mriGrab = false; return; }
+      if (!controls) return;
       controls.enabled = enabledBeforeGrab;
       onRelease();
       requestRender();
@@ -122,30 +132,44 @@ export function attachGestureControl({ camera, controls, requestRender, onGrab, 
     start: () => notifyListen(true), end: () => notifyListen(false),
     cancel: () => notifyListen(false, true),
   });
-  function reset() { receiver.reset(); listenReceiver.reset(); }
+  function reset() {
+    receiver.reset(); listenReceiver.reset();
+    mriViewer?.gesturePoint({ connected: false });
+  }
   toggle.addEventListener('change', reset);
   document.addEventListener('visibilitychange', reset);
+  document.addEventListener('viewer-mode-change', reset);
   window.addEventListener('pagehide', reset);
 
   async function poll() {
+    const started = performance.now();
     let delay = 1000;
     try {
       if (document.hidden) { reset(); return; }
       const response = await fetch('/api/gestures/state', { cache: 'no-store', signal: AbortSignal.timeout(1500) });
       if (!response.ok) throw new Error('Gestenverbindung unterbrochen');
       const state = await response.json();
-      if (toggle.checked && !document.hidden) { receiver.accept(state); listenReceiver.accept(state); }
+      gestureState = state;
+      if (toggle.checked && !document.hidden) {
+        mriViewer?.gesturePoint(state);
+        receiver.accept(state); listenReceiver.accept(state);
+      }
       else reset();
-      if (state.status === 'error') label.textContent = `Kamera nicht verfügbar: ${state.error}`;
-      else if (state.status === 'disabled') label.textContent = 'Gestenerkennung ist beim Serverstart ausgeschaltet.';
-      else if (!state.connected) label.textContent = 'Warte auf die Kamera …';
-      else if (!toggle.checked) label.textContent = 'Gestensteuerung für diese Ansicht pausiert.';
-      else label.textContent = state.listening ? 'Sprechgeste aktiv · Finger senken zum Senden' : state.holding ? 'Gegriffen · Hand bewegen zum Drehen' : state.idle ? 'Bereit · Sparmodus (3 Bilder/s)' : 'Bereit · Greifen zum Drehen / Zeigefinger hoch zum Sprechen';
-      delay = state.connected ? (state.idle ? 333 : 50) : 1000;
+      const message = state.status === 'error' ? `Kamera nicht verfügbar: ${state.error}`
+        : state.status === 'disabled' ? 'Gestenerkennung ist beim Serverstart ausgeschaltet.'
+        : !state.connected ? 'Warte auf die Kamera …'
+        : !toggle.checked ? 'Gestensteuerung für diese Ansicht pausiert.'
+        : state.listening ? 'Sprechgeste aktiv · Finger senken zum Senden'
+        : state.holding ? 'Gegriffen · Hand bewegen zum Drehen'
+        : state.idle ? 'Bereit · Sparmodus (3 Bilder/s)' : 'Bereit · Greifen zum Drehen / Zeigefinger hoch zum Sprechen';
+      if (label.textContent !== message) label.textContent = message;
+      delay = state.connected && toggle.checked ? (state.idle ? 333 : 50) : 1000;
     } catch (error) {
       reset();
       label.textContent = 'Verbindung zur Gestenerkennung unterbrochen.';
-    } finally { window.setTimeout(poll, delay); }
+    // Include network/handling time in the interval. Slow frames must not add
+    // another complete 50 ms pause; keep one request in flight, without catch-up.
+    } finally { window.setTimeout(poll, Math.max(10, delay - (performance.now() - started))); }
   }
   async function previewFrame() {
     try {

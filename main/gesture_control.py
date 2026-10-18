@@ -15,8 +15,9 @@ MODEL_PATH = Path(__file__).resolve().parent.parent / "models" / "hand_landmarke
 IDLE_FPS = 3                    # Maximale Bildrate, wenn keine Hand erkannt wird.
 IDLE_TIMEOUT_SECONDS = 60       # Sekunden ohne Hand erkannt, bevor die Bildrate reduziert wird.
 PINCH_CLOSE = 0.30              # Abstand 4–8 relativ zur Handbreite (5–17).
-PINCH_OPEN = 0.5               # Unterschiedliche Schwellen verhindern Flackern.
-POINTER_SMOOTHING = 0.4         # Glättung der Cursorbewegung, 0 = keine Glättung, 1 = keine Bewegung.
+PINCH_OPEN = 0.5                # Unterschiedliche Schwellen verhindern Flackern.
+POINTER_SMOOTHING = 0.3         # Anteil der neuen Position: 0 = keine Bewegung, 1 = keine Glättung.
+POINTER_SENSITIVITY = 2.0       # Die mittlere Hälfte des Kamerabildes deckt die gesamte Ansicht ab.
 ACTIVE_FPS = 20                 # Maximale Bildrate, wenn eine Hand erkannt wird.
 LISTEN_HOLD_SECONDS = 0.6       # 0.6 Sekunden halten, um Push-to-Talk zu aktivieren.
 
@@ -29,6 +30,13 @@ class PinchDrag:
         self.cursor = None
         self.origin = None
         self.ratio = None
+
+    def screen_pointer(self, width, height):
+        """Map the smoothed hand position to the screen without scaling rotation."""
+        if self.cursor is None:
+            return None
+        return [max(0.0, min(1.0, 0.5 + (position / (size - 1) - 0.5) * POINTER_SENSITIVITY))
+                for position, size in zip(self.cursor, (width, height))]
 
     def update(self, hand, width, height):
         if not hand:
@@ -178,7 +186,8 @@ def run(service):
                 height, width = rgb.shape[:2]
                 event = gesture.update(hand, width, height)
                 listening = listen.update(hand, width, height, now, blocked=gesture.holding)
-                service.publish(event, idle, listening=listening)
+                service.publish(event, idle, listening=listening,
+                                pointer=gesture.screen_pointer(width, height))
                 if service.wants_preview():
                     image = cv2.flip(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR), 1)
                     for number, point in enumerate(hand or []):

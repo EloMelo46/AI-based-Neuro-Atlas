@@ -22,9 +22,11 @@ anatomisch erfundenen Teilmeshes daraus.
 
 Alle nachfolgend als funktionell bezeichneten Gruppen tragen
 `approximation=true`, einen individuellen Hinweis und Quellenlinks. Der
-Assistent erhält diese Hinweise; bei Werkzeugaufrufen bleiben sie außerdem
+Assistent erhält diese Hinweise; bei Werkzeugaufrufen bleiben sie ausserdem
 als `selection_groups` erhalten, nachdem die IDs für den Viewer expandiert
-wurden. Eine funktionelle Lokalisation wurde an diesem individuellen MRT
+wurden. Normale Auswahlmeldungen hängen diese Hinweise nicht automatisch an.
+Der Assistent erläutert sie auf Nachfrage zur Genauigkeit oder wenn eine
+konkrete Einschränkung für die Antwort relevant ist. Eine funktionelle Lokalisation wurde an diesem individuellen MRT
 nicht gemessen. Dass gyrale Labels funktionelle Grenzen nicht ersetzen, wird
 unter anderem durch die multimodale Parzellierung von
 [Glasser et al. (2016)](https://pmc.ncbi.nlm.nih.gov/articles/PMC4990127/)

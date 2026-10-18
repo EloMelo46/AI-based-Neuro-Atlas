@@ -1,0 +1,43 @@
+[hidden] { display: none !important; }
+#mri-scene { position: fixed; inset: 84px 374px 20px 334px; display: flex; flex-direction: column; min-width: 0; }
+body[data-viewer="mri"] #scene { visibility: hidden; pointer-events: none; }
+body[data-viewer="mri"] #cuts,
+body[data-viewer="mri"] #region-legend,
+body[data-viewer="mri"] .rotation-option,
+body[data-viewer="mri"] .viewer-settings > label { display: none; }
+.mri-toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 6px 0; font-size: 12px; }
+.mri-toolbar label { display: flex; align-items: center; gap: 6px; }
+#mri-status { margin: 4px 0 8px; color: var(--accent); font-size: 12px; min-height: 18px; }
+#mri-status[data-error="true"] { color: #ffaaaa; }
+#mri-viewers { flex: 1; min-height: 0; display: flex; gap: 8px; }
+.mri-window { flex: 1; min-width: 0; display: flex; flex-direction: column; border: 1px solid #314e59; border-radius: 12px; overflow: hidden; background: #000; }
+.mri-window header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; font-size: 11px; min-height: 40px; background: #111b23; }
+.mri-window header strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mri-window header span { color: var(--muted); }
+.mri-window header button { padding: 0 10px; min-height: 28px; }
+.mri-canvas-host { position: relative; flex: 1; min-height: 0; }
+.mri-canvas-host canvas { width: 100%; height: 100%; touch-action: none; cursor: crosshair; }
+.mri-canvas-host canvas:active { cursor: grabbing; }
+.mri-help { font-size: 11px; color: var(--muted); margin: 6px 0 0; }
+#mri-region-controls { margin-top: 16px; display: grid; gap: 8px; }
+#mri-region-controls label { font-size: 12px; }
+#mri-region { width: 100%; }
+#gesture-pointer { position: fixed; z-index: 100; pointer-events: none; width: 24px; height: 24px; border: 2px solid #8de2d3; border-radius: 50%; background: #8de2d333; box-shadow: 0 0 0 4px #0008; transform: translate(-50%, -50%); }
+#gesture-pointer.grabbing { background: #8de2d3aa; border-color: white; transform: translate(-50%, -50%) scale(.8); }
+body[data-viewer="mri"].cursor-idle, body[data-viewer="mri"].cursor-idle * { cursor: auto !important; }
+body.viewer-fullscreen #mri-scene { inset: 8px; }
+body.viewer-fullscreen .mri-toolbar,
+body.viewer-fullscreen #mri-status:not([data-error="true"]),
+body.viewer-fullscreen .mri-window > header,
+body.viewer-fullscreen .mri-help { display: none; }
+@media (max-width: 1100px) and (min-width: 901px) { #mri-scene { left: 298px; right: 318px; } }
+@media (max-width: 900px) {
+  #mri-scene { inset: 60px 8px calc(80px + env(safe-area-inset-bottom)); }
+  body[data-panel="regions"] #mri-scene, body[data-panel="assistant"] #mri-scene { bottom: 58dvh; }
+  .mri-toolbar { gap: 5px; }
+  .mri-toolbar select { font-size: 12px; max-width: 165px; }
+  .mri-window header span, .mri-help { display: none; }
+}
+@media (max-width: 900px) and (orientation: landscape) {
+  body[data-panel="regions"] #mri-scene, body[data-panel="assistant"] #mri-scene { right: 52%; bottom: 80px; }
+}

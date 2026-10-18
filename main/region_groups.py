@@ -1,8 +1,8 @@
 """Logical selections over DKT/aseg labels, not new meshes or functional atlases.
 
 Lobes follow Klein & Tourville (2012), Table 2, restricted to the 31 DKT
-labels actually present. Functional selections are deliberately coarse and
-must retain their approximation notes in the UI and assistant context.
+labels actually present. Functional selections retain approximation metadata
+for questions about their method and precision.
 """
 from functools import lru_cache
 
@@ -69,7 +69,7 @@ DEFINITIONS = (
     _definition('broca', 'Broca-Region', ('parsopercularis', 'parstriangularis'), aliases=('Broca', 'Broca-Areal', 'Broca-Region'),
                 sources=(DKT, BROCA), default='left',
                 note='DKT-basierte Annäherung an die linksseitige Broca-Region. Pars opercularis/triangularis sind nicht identisch mit Area 44/45. Rechts wird das homologe Gebiet gewählt, keine Sprachdominanz behauptet.'),
-    _definition('wernicke', 'Wernicke-Region (grobe Annäherung)', ('superiortemporal', 'middletemporal', 'supramarginal', 'inferiorparietal'),
+    _definition('wernicke', 'Wernicke-Region', ('superiortemporal', 'middletemporal', 'supramarginal', 'inferiorparietal'),
                 aliases=('Wernicke', 'Wernicke-Areal', 'Wernicke-Region'), sources=(DKT, LANGUAGE), default='left',
                 note='Sehr grobe DKT-basierte Annäherung: posteriore temporale und inferior-parietale Anteile sind nicht separat segmentiert, daher werden ganze Gyri gewählt. Kein exakt definiertes oder alleiniges Sprachverständniszentrum; rechts nur homologe Gebiete.'),
     _definition('cingulate', 'Cingulärer Kortex', CINGULATE, kind='anatomical', aliases=('cingulärer Kortex', 'cingulate cortex', 'Gyrus cinguli'), sources=(DKT,),

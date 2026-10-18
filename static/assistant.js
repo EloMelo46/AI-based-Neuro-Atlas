@@ -20,6 +20,8 @@ export async function initAssistant(viewer) {
   let microphone = null;
   let requestController = null;
   let interrupted = false;
+  const voice = document.getElementById('assistant-voice');
+  const getState = () => ({ ...viewer.getState(), voice: voice.value });
   const mentions = initMentionCues(viewer);
   const speech = initSpeech({
     onError(text) { message(text, 'error'); },
@@ -128,12 +130,30 @@ export async function initAssistant(viewer) {
   });
   microphone = initMicrophone({ button: document.getElementById('assistant-mic'), status, setBusy, onStart: speech.stop,
     onRecordingChange(active) { document.body.classList.toggle('assistant-listening', active); },
+    onPhaseChange(phase, source) {
+      const feedback = document.getElementById('voice-feedback');
+      if (!feedback) return;
+      feedback.hidden = phase === 'idle';
+      feedback.dataset.phase = phase;
+      document.getElementById('voice-feedback-title').textContent = {
+        requesting: 'Mikrofon wird geöffnet …', recording: 'Ich höre zu', uploading: 'Sprache wird erkannt …', idle: '',
+      }[phase];
+      const hint = document.getElementById('voice-feedback-hint');
+      const stop = document.getElementById('voice-feedback-stop');
+      hint.hidden = source === 'gesture';
+      stop.hidden = source === 'gesture';
+      hint.textContent = source === 'gesture' ? '' : phase === 'recording'
+        ? 'Sprechen und anschliessend senden'
+        : phase === 'requesting' ? 'Mikrofonzugriff im Browser erlauben' : 'Aufnahme beendet';
+      stop.textContent = phase === 'recording' ? 'Stoppen & senden' : 'Abbrechen';
+    },
     onText(text) {
       input.value = text;
       document.getElementById('assistant-form').requestSubmit();
     },
     onError(text) { message(text, 'error'); status.textContent = 'Mikrofoneingabe fehlgeschlagen.'; },
   });
+  document.getElementById('voice-feedback-stop')?.addEventListener('click', () => microphone.stopCurrent());
   document.addEventListener('gesture-listen', event => {
     if (event.detail.active) void microphone.start('gesture');
     else microphone.stop('gesture', event.detail.cancel);
@@ -162,34 +182,52 @@ export async function initAssistant(viewer) {
     requestController = new AbortController();
     const timeout = setTimeout(() => requestController?.abort(), 180000);
     let streamedRow = null;
+    let speechStream = null;
     try {
-      const request = body => streamChat('/api/assistant/chat', body, delta => {
-        if (!streamedRow) streamedRow = message('', 'streaming');
-        streamedRow.appendChild(document.createTextNode(delta));
-        log.scrollTop = log.scrollHeight;
-        status.textContent = 'Antwort wird übertragen …';
-      }, requestController.signal);
-      let data = await request({ message: question, state: viewer.getState() });
+      const request = body => {
+        speechStream = document.getElementById('assistant-speak').checked ? speech.begin(voice.value) : null;
+        return streamChat('/api/assistant/chat', body, delta => {
+          if (!streamedRow) streamedRow = message('', 'streaming');
+          streamedRow.appendChild(document.createTextNode(delta));
+          log.scrollTop = log.scrollHeight;
+          status.textContent = 'Antwort wird übertragen …';
+          speechStream?.push(delta);
+        }, requestController.signal);
+      };
+      let data = await request({ message: question, state: getState() });
       for (let round = 0; data.actions.length && round < 7; round++) {
+        speech.stop();
+        if (streamedRow) { streamedRow.classList.remove('streaming'); streamedRow = null; }
         const results = [];
         for (const action of data.actions) {
+          const { appearance, mri_scan, voice: previousVoice } = getState();
+          const view_before = { appearance, mri_scan, voice: previousVoice };
           try {
-            const state = viewer.execute(action);
-            results.push({ call_id: action.call_id, ok: true, state });
-            message(viewer.describe(action), 'action');
+            if (action.name === 'set_voice') {
+              if (!['marin', 'cedar'].includes(action.arguments.voice)) throw new Error('Unbekannte Stimme.');
+              voice.value = action.arguments.voice;
+              voice.dispatchEvent(new Event('change'));
+            } else await viewer.execute(action);
+            const state = getState();
+            results.push({ call_id: action.call_id, ok: true, state, view_before });
+            message(action.name === 'set_voice' ? `Stimme: ${voice.selectedOptions[0].textContent}` : viewer.describe(action), 'action');
           } catch (error) {
-            results.push({ call_id: action.call_id, ok: false, error: error.message });
+            results.push({ call_id: action.call_id, ok: false, error: error.message,
+              state: getState(), view_before });
             message(error.message, 'error');
           }
         }
-        data = await request({ turn_id: data.turn_id, results, state: viewer.getState() });
+        data = await request({ turn_id: data.turn_id, results, state: getState() });
       }
       if (data.actions.length) throw new Error('Aktionslimit erreicht. Bitte neues Gespräch starten.');
       data.messages.forEach((part, index) => answer(part, index === 0 ? streamedRow : null));
-      if (document.getElementById('assistant-speak').checked) speech.speak(data.messages, document.getElementById('assistant-voice').value);
-      else mentions.showText(data.messages);
+      if (document.getElementById('assistant-speak').checked) {
+        if (speechStream) void speechStream.finish(data.messages);
+        else void speech.speak(data.messages, voice.value);
+      } else mentions.showText(data.messages);
       status.textContent = 'Bereit.';
     } catch (error) {
+      speech.stop();
       streamedRow?.classList.remove('streaming');
       if (error.name === 'AbortError') {
         if (!interrupted) {

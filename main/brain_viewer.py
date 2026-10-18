@@ -13,19 +13,24 @@ if __package__ in (None, ''):
     from main.geometry_validation import cut_validation
     from main.viewer_settings import FOCUS_CONTEXT_OPACITIES
     from main.gesture_service import GestureService
+    from main.mri_viewer import create_mri_blueprint, MRIStore, mri_regions
 else:
     from .brain_assistant import create_assistant
     from .mesh_catalog import DEFAULT_EXPORT_DIR, available_mesh_names, load_regions, region_groups, selection_aliases
     from .geometry_validation import cut_validation
     from .viewer_settings import FOCUS_CONTEXT_OPACITIES
     from .gesture_service import GestureService
+    from .mri_viewer import create_mri_blueprint, MRIStore, mri_regions
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 MESH_DIR = DEFAULT_EXPORT_DIR
 app = Flask(__name__, static_folder=str(PROJECT_ROOT / "static"), static_url_path="/static")
 app.secret_key = os.environ.get('BRAIN_VIEWER_SESSION_SECRET') or secrets.token_hex(32)
 app.config.update(MAX_CONTENT_LENGTH=11 * 1024 * 1024, SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Strict')
-app.register_blueprint(create_assistant(MESH_DIR))
+mri_store = MRIStore(os.environ.get('NEURO_ATLAS_MRI_DIR', str(PROJECT_ROOT / 'original_mri')),
+                     MESH_DIR, PROJECT_ROOT / '.local' / 'mri')
+app.register_blueprint(create_assistant(MESH_DIR, mri_store.catalog))
+app.register_blueprint(create_mri_blueprint(PROJECT_ROOT, MESH_DIR, mri_store))
 
 gestures = GestureService()
 
@@ -61,6 +66,7 @@ HTML = r"""
     .region-row:has(input:not(:checked)) .region-name { opacity: 0.55; }
   </style>
   <link rel="stylesheet" href="{{ url_for('static', filename='viewer.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='mri_viewer.css') }}">
   <script type="importmap">
     {"imports": {
       "three": "/static/vendor/three/build/three.module.js",
@@ -68,13 +74,35 @@ HTML = r"""
     }}
   </script>
 </head>
-<body>
+<body data-initial-viewer="{{ initial_viewer }}" data-viewer="{{ initial_viewer }}">
 <header class="app-header"><div><span class="brand-icon" aria-hidden="true">◉</span> NEURO<span class="brand-light">ATLAS</span></div><div class="header-actions"><button id="fullscreen-toggle" type="button" aria-pressed="false" aria-label="Vollbild starten" title="Vollbild starten">Vollbild</button></div></header>
 <p id="fullscreen-status" role="status" hidden></p>
 <div id="scene" aria-label="Interaktives 3D-Gehirn"></div>
+<section id="mri-scene" aria-label="MRT-Ansicht" hidden>
+  <div class="mri-toolbar">
+    <label>Aufnahme <select id="mri-scan"><option value="brain">Brain Only</option></select></label>
+    <label><input id="mri-overlay" type="checkbox" checked> Regionen markieren</label>
+    <button id="mri-clear-selection" type="button" disabled>Markierung entfernen</button>
+    <button id="mri-reset" type="button">MRT zurücksetzen</button>
+  </div>
+  <p id="mri-status" role="status">MRT wird vorbereitet …</p>
+  <div id="mri-viewers">
+    <article class="mri-window" id="mri-main-window">
+      <header><strong id="mri-scan-title">MRT</strong><span>Koronal · Sagittal · Axial · 3D</span></header>
+      <div class="mri-canvas-host"><canvas id="mri-main" aria-label="MRT: drei Schnitte und drehbare 3D-Ansicht" tabindex="0"></canvas></div>
+    </article>
+  </div>
+  <p class="mri-help">Schnitte: klicken und scrollen · 3D: greifen und ziehen · Rechts ziehen: Kontrast · Handzeiger: ansteuern und zugreifen</p>
+</section>
+<div id="gesture-pointer" aria-hidden="true" hidden></div>
+<aside id="voice-feedback" aria-label="Spracheingabe" hidden>
+  <span class="voice-indicator" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+  <div><strong id="voice-feedback-title" role="status" aria-live="polite"></strong><small id="voice-feedback-hint"></small></div>
+  <button id="voice-feedback-stop" type="button">Stoppen &amp; senden</button>
+</aside>
 <div id="info">
-  <h3>Gehirn – alle Regionen</h3>
-  <p id="status" role="status">{{ count }} Regionen gefunden – 3D-Ansicht wird gestartet …</p>
+  <h3>{{ 'MRT · Originalaufnahmen' if initial_viewer == 'mri' else 'Gehirn – alle Regionen' }}</h3>
+  <p id="status" role="status">{% if initial_viewer == 'mri' %}MRT-Ansicht wird gestartet …{% else %}{{ count }} Regionen gefunden – 3D-Ansicht wird gestartet …{% endif %}</p>
   <button id="reset" disabled>Ansicht zurücksetzen</button>
   <section aria-label="Gestensteuerung">
     <label><input id="gesture-enabled" type="checkbox" checked> Handgesten aktiv</label>
@@ -92,6 +120,7 @@ HTML = r"""
           <option value="learning">Lernen</option>
           <option value="natural">Natürlich</option>
           <option value="digital">Digital</option>
+          <option value="mri">MRT</option>
         </select>
       </label>
     </div>
@@ -102,6 +131,12 @@ HTML = r"""
       </select>
     </label>
   </div>
+  <section id="mri-region-controls" hidden>
+    <label for="mri-region">Region oder Gruppe im MRT markieren</label>
+    <select id="mri-region"><option value="">Bitte wählen …</option></select>
+    <button id="mri-show-region" type="button">Region zeigen</button>
+    <p class="hint">Auch per Sprache: «Zeige mir den Hirnstamm.»</p>
+  </section>
   <details id="region-legend" open>
     <summary>Legende · Areale ein-/ausblenden</summary>
     <div class="legend-actions">
@@ -173,12 +208,13 @@ HTML = r"""
 </nav>
 <script type="module" src="{{ url_for('static', filename='viewer_ui.js') }}"></script>
 <script type="module" src="{{ url_for('static', filename='assistant_bridge.js') }}"></script>
+<script id="mri-region-list" type="application/json">{{ mri_regions|tojson }}</script>
 <script id="mesh-list" type="application/json">{{ meshes|tojson }}</script>
 <script id="region-groups" type="application/json">{{ groups|tojson }}</script>
 <script id="region-aliases" type="application/json">{{ aliases|tojson }}</script>
 <script id="focus-context-opacities" type="application/json">{{ focus_context_opacities|tojson }}</script>
 <script>
-  import({{ url_for('static', filename='brain_viewer.js')|tojson }}).catch((error) => {
+  import({{ url_for('static', filename='viewer_app.js')|tojson }}).catch((error) => {
     document.getElementById('status').textContent = '3D-Ansicht konnte nicht gestartet werden.';
     const item = document.createElement('li');
     item.textContent = 'Bitte lokale Dateien und WebGL prüfen: ' + error.message;
@@ -191,7 +227,16 @@ HTML = r"""
 """
 
 @app.route("/")
+@app.route("/mri")
 def index():
+    if request.path == "/mri":
+        from main.region_groups import groups_for_ids
+        from main.mesh_catalog import aliases_for_ids
+        ids = mri_store.catalog()['regions']
+        return render_template_string(HTML, meshes=[], count=0, mesh_detail='optimized',
+            groups=groups_for_ids(ids), aliases=aliases_for_ids(ids), cut_excluded=0,
+            focus_context_opacities=FOCUS_CONTEXT_OPACITIES, preview_triangles='–',
+            initial_viewer='mri', mri_regions=mri_regions())
     regions = [region for region in load_regions(MESH_DIR) if region['renderable']]
     validation = cut_validation(MESH_DIR, regions)
     meshes = [{**region, **validation[region['region_id']],
@@ -204,7 +249,16 @@ def index():
         groups=region_groups(MESH_DIR), aliases=selection_aliases(MESH_DIR),
         cut_excluded=sum(not region['cut_eligible'] for region in meshes),
         focus_context_opacities=FOCUS_CONTEXT_OPACITIES,
-        preview_triangles=triangle_label(preview_count))
+        preview_triangles=triangle_label(preview_count), initial_viewer='mesh', mri_regions=mri_regions())
+
+@app.get('/api/mesh-catalog')
+def mesh_catalog_payload():
+    regions = [region for region in load_regions(MESH_DIR) if region['renderable']]
+    validation = cut_validation(MESH_DIR, regions)
+    return {'meshes': [{**region, **validation[region['region_id']],
+        'glb_url': '/mesh/' + region['mesh_glb'] + '?v=' + validation[region['region_id']]['mesh_sha256']}
+        for region in regions]}
+
 
 @app.route("/mesh/<path:filename>")
 def mesh(filename):

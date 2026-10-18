@@ -56,7 +56,7 @@ let cursorIdleTimer = null;
 function showCursor() {
   window.clearTimeout(cursorIdleTimer);
   document.body.classList.remove('cursor-idle');
-  if (!document.hidden) {
+  if (!document.hidden && document.body.dataset.viewer !== 'mri') {
     cursorIdleTimer = window.setTimeout(() => document.body.classList.add('cursor-idle'), CURSOR_IDLE_MS);
   }
 }
@@ -67,6 +67,7 @@ for (const type of ['pointermove', 'pointerdown']) {
 }
 document.addEventListener('wheel', showCursor, { passive: true });
 document.addEventListener('visibilitychange', showCursor);
+document.addEventListener('viewer-mode-change', showCursor);
 window.addEventListener('focus', showCursor);
 window.addEventListener('pagehide', () => window.clearTimeout(cursorIdleTimer));
 showCursor();

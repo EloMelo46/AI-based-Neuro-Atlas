@@ -17,6 +17,7 @@ class GestureService:
         self.listening = False
         self.listen_id = 0
         self.x = self.y = 0.0
+        self.pointer = None
         self.updated = None
         self.idle = True
         self.preview_until = 0.0
@@ -48,11 +49,12 @@ class GestureService:
                 if self.status != 'error':
                     self.status = 'stopped'
 
-    def publish(self, event, idle, listening=False):
+    def publish(self, event, idle, listening=False, pointer=None):
         with self.lock:
             self.updated = time.monotonic()
             self.status = 'running'
             self.idle = idle
+            self.pointer = pointer
             if listening and not self.listening:
                 self.listen_id += 1
             self.listening = listening
@@ -76,7 +78,8 @@ class GestureService:
             return dict(session=self.session, status=self.status, error=self.error,
                         connected=connected, holding=self.holding and connected,
                         grab_id=self.grab_id, x=self.x, y=self.y, idle=self.idle,
-                        listening=self.listening and connected, listen_id=self.listen_id)
+                        listening=self.listening and connected, listen_id=self.listen_id,
+                        pointer=self.pointer if connected else None)
 
     def wants_preview(self):
         with self.lock:
